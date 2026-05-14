@@ -1,0 +1,615 @@
+﻿@page
+@model IndexModel
+@{
+    ViewData["Title"] = "PIM Dashboard";
+}
+
+<!-- =========================================================
+     🎨 PIM Visual Theme
+
+     PURPOSE:
+     - Centralized UI color semantics
+     - Shared between table rows + preview tree
+     - Designed to clearly communicate decisions
+========================================================= -->
+<style>
+
+    /* =====================================================
+       ROW BACKGROUNDS
+    ===================================================== */
+
+    .row-error {
+        background-color: #f8d7da;
+    }
+
+    .row-review {
+        background-color: #cce5ff;
+    }
+
+    .row-delete {
+        background-color: #FFE4EF;
+    }
+
+    .row-best {
+        background-color: #fff3cd;
+    }
+
+    .row-alt {
+        background-color: #d4edda;
+    }
+
+    /* =====================================================
+       TEXT COLORS
+    ===================================================== */
+
+    .text-error {
+        color: #842029;
+    }
+
+    .text-review {
+        color: #084298;
+    }
+
+    .text-delete {
+        color: #8a1538;
+    }
+
+    .text-best {
+        color: #856404;
+    }
+
+    .text-alt {
+        color: #0f5132;
+    }
+
+    /* =====================================================
+       STATUS TAGS
+    ===================================================== */
+
+    .tag {
+        margin-left: 10px;
+        font-size: 0.75em;
+        font-weight: bold;
+        padding: 2px 6px;
+        border-radius: 4px;
+    }
+
+    .tag-error {
+        background-color: #f8d7da;
+        color: #842029;
+    }
+
+    .tag-review {
+        background-color: #cce5ff;
+        color: #084298;
+    }
+
+    .tag-delete {
+        background-color: #FFE4EF;
+        color: #8a1538;
+    }
+
+    .tag-best {
+        background-color: #fff3cd;
+        color: #856404;
+    }
+
+    .tag-alt {
+        background-color: #d4edda;
+        color: #0f5132;
+    }
+
+</style>
+
+<h1>Plex Intake Manager (PIM)</h1>
+
+<!-- =========================================================
+     🔄 Workflow Control Panel
+
+     CURRENT MVP BEHAVIOR:
+     - "Full Scan" currently performs:
+         1. File discovery
+         2. Filename parsing
+         3. Metadata enrichment
+         4. Duplicate detection
+         5. Rename preview generation
+
+     FUTURE GOAL:
+     Split into true multi-phase workflow:
+         Phase 1 → Scan
+         Phase 2 → Enrich Metadata
+         Phase 3 → Review / Resolve
+         Phase 4 → Commit Changes
+========================================================= -->
+
+<form method="post" id="workflowForm">
+    @Html.AntiForgeryToken()
+</form>
+
+<div style="margin-bottom:20px; padding:12px; border:1px solid #ccc;">
+
+    <div style="margin-bottom:10px;">
+        <strong>Workflow:</strong>
+    </div>
+
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+
+        <!-- =================================================
+             FULL SCAN
+        ================================================== -->
+        <button type="button" id="scanBtn">
+            🔄 Full Scan
+        </button>
+
+        <!-- =================================================
+             METADATA ENRICHMENT
+        ================================================== -->
+        <button type="button"
+                id="enrichBtn"
+                disabled="@(!Model.Movies.Any())">
+
+            🌐 Retrieve Metadata
+
+        </button>
+
+        <!-- =================================================
+             COMMIT CHANGES
+        ================================================== -->
+        <button type="button"
+                id="commitBtn"
+                disabled="@(!Model.Movies.Any()
+                            || Model.Movies.Any(m => m.NeedsReview || m.HasError))">
+
+            🚀 Apply Changes
+
+        </button>
+
+        <!-- =================================================
+             DRY RUN CHECKBOX
+        ================================================== -->
+        <label style="display:flex; align-items:center; gap:6px; margin-left:10px;">
+
+            <input asp-for="DryRun" />
+
+            <span>Dry Run</span>
+
+        </label>
+
+        <!-- =================================================
+             CANCEL / RESET
+        ================================================== -->
+        <button type="button"
+                id="cancelBtn"
+                disabled>
+
+            ⛔ Cancel
+
+        </button>
+
+    </div>
+
+    <!-- =====================================================
+         WORKFLOW STATUS
+    ====================================================== -->
+    <div id="workflowStatus"
+         style="margin-top:10px; font-style:italic;">
+
+        Ready
+
+    </div>
+
+</div>
+
+<!-- =========================================================
+     SUMMARY
+========================================================= -->
+<p>
+    <strong>Total Movies: @Model.Movies.Count</strong>
+</p>
+
+<br />
+
+<!-- =========================================================
+     📊 MOVIE DECISION TABLE
+========================================================= -->
+<table border="1"
+       cellpadding="5"
+       cellspacing="0"
+       style="width:100%; border-collapse: collapse;">
+
+    <thead style="background-color: #f2f2f2;">
+        <tr>
+            <th>Title</th>
+            <th>Year</th>
+            <th>Size (MB)</th>
+            <th>Status</th>
+            <th>Action</th>
+            <th>Review Reason</th>
+            <th>Original (Before)</th>
+            <th>New (After)</th>
+        </tr>
+    </thead>
+
+    <tbody>
+
+        @foreach (var movie in Model.Movies)
+        {
+            var rowClass =
+                movie.HasError ? "row-error" :
+                movie.NeedsReview ? "row-review" :
+                (movie.IsDuplicate
+                    && !movie.KeepRecommended
+                    && !movie.IsAlternateVersion)
+                        ? "row-delete" :
+                movie.KeepRecommended ? "row-best" :
+                movie.IsAlternateVersion ? "row-alt" :
+                "";
+
+            <tr class="@rowClass">
+
+                <td>@movie.Title</td>
+                <td>@movie.Year</td>
+                <td>@(movie.FileSizeBytes / (1024 * 1024))</td>
+
+                <!-- STATUS -->
+                <td>
+
+                    @if (movie.HasError)
+                    {
+                        <span>❌ Error</span>
+                    }
+                    else if (movie.NeedsReview)
+                    {
+                        <span>🔍 Needs Review</span>
+                    }
+                    else if (movie.KeepRecommended)
+                    {
+                        <span>⭐ Best Version</span>
+                    }
+                    else if (movie.IsAlternateVersion)
+                    {
+                        <span>🎬 Alternate Version</span>
+                    }
+                    else if (movie.IsDuplicate)
+                    {
+                        <span>🗑 Duplicate</span>
+                    }
+                    else
+                    {
+                        <span>✔ Unique</span>
+                    }
+
+                </td>
+
+                <!-- ACTION -->
+                <td>
+
+                    @if (movie.HasError)
+                    {
+                        <span style="color:#721c24;">Fix</span>
+                    }
+                    else if (movie.NeedsReview)
+                    {
+                        <span style="color:#004085;">Review</span>
+                    }
+                    else if (movie.KeepRecommended)
+                    {
+                        <span style="color:#856404;">Keep</span>
+                    }
+                    else if (movie.IsAlternateVersion)
+                    {
+                        <span style="color:#155724;">Keep</span>
+                    }
+                    else if (movie.IsDuplicate)
+                    {
+                        <span style="color:#8a4b00;">Delete</span>
+                    }
+                    else
+                    {
+                        <span>None</span>
+                    }
+
+                </td>
+
+                <!-- REVIEW DETAILS -->
+                <td>
+
+                    @if (movie.NeedsReview)
+                    {
+                        <span style="font-size:0.8em; color:#004085;">
+                            @movie.ReviewReason
+                        </span>
+                    }
+
+                </td>
+
+                <!-- ORIGINAL -->
+                <td style="font-size: 0.8em; color: #666;">
+
+                    <div style="font-weight: bold;">
+                        OLD
+                    </div>
+
+                    @movie.OriginalFilePath
+
+                </td>
+
+                <!-- TARGET -->
+                <td>
+
+                    <div style="color: green; font-weight: bold;">
+                        NEW
+                    </div>
+
+                    <div style="font-size: 0.85em;">
+                        @movie.TargetPath
+                    </div>
+
+                </td>
+
+            </tr>
+        }
+
+    </tbody>
+
+</table>
+
+<!-- =========================================================
+     🌳 PREVIEW FILE STRUCTURE
+========================================================= -->
+
+<h2>Preview File Structure</h2>
+
+<p style="color:#084298;">
+    🔍 @Model.Movies.Count(m => m.NeedsReview)
+    movies require review and are not shown.
+</p>
+
+<p style="color:#842029;">
+    ❌ @Model.Movies.Count(m => m.HasError)
+    movies have errors and are excluded.
+</p>
+
+@if (Model.PreviewTree != null)
+{
+    <ul>
+        @{
+            RenderNode(Model.PreviewTree);
+        }
+    </ul>
+}
+else
+{
+    <p style="color:gray;">
+        No preview available.
+        Run a scan to generate the file structure.
+    </p>
+}
+
+<!-- =========================================================
+     ⚡ WORKFLOW SCRIPT
+========================================================= -->
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+
+        const tokenInput =
+            document.querySelector('input[name="__RequestVerificationToken"]');
+
+        if (!tokenInput) {
+            console.error("❌ CSRF token not found");
+            return;
+        }
+
+        const workflowStatus =
+            document.getElementById("workflowStatus");
+
+        // =====================================================
+        // 🔄 FULL SCAN
+        // =====================================================
+        const scanBtn = document.getElementById("scanBtn");
+
+        if (scanBtn) {
+            scanBtn.addEventListener("click", async () => {
+
+                workflowStatus.innerText = "Starting scan...";
+
+                const response = await fetch("?handler=Rescan", {
+                    method: "POST",
+                    headers: {
+                        "RequestVerificationToken": tokenInput.value
+                    }
+                });
+
+                if (!response.ok) {
+                    workflowStatus.innerText = "Scan failed.";
+                    return;
+                }
+
+                pollProgress("Scan complete!");
+            });
+        }
+
+        // =====================================================
+        // 🌐 RETRIEVE METADATA
+        // =====================================================
+        const enrichBtn = document.getElementById("enrichBtn");
+
+        if (enrichBtn) {
+            enrichBtn.addEventListener("click", async () => {
+
+                workflowStatus.innerText = "Retrieving metadata...";
+
+                const response = await fetch("?handler=Enrich", {
+                    method: "POST",
+                    headers: {
+                        "RequestVerificationToken": tokenInput.value
+                    }
+                });
+
+                if (!response.ok) {
+                    workflowStatus.innerText = "Metadata enrichment failed.";
+                    return;
+                }
+
+                pollProgress("Metadata retrieval complete!");
+            });
+        }
+
+                // =====================================================
+        // 🚀 APPLY CHANGES
+        // =====================================================
+        const commitBtn = document.getElementById("commitBtn");
+
+        if (commitBtn) {
+            commitBtn.addEventListener("click", async () => {
+
+                const dryRunCheckbox =
+                    document.getElementById("DryRun");
+
+                const isDryRun = dryRunCheckbox
+                    ? dryRunCheckbox.checked
+                    : true;
+
+                workflowStatus.innerText = isDryRun
+                    ? "Running dry run..."
+                    : "Applying changes...";
+
+                const formData = new FormData();
+                formData.append("DryRun", isDryRun);
+
+                const response = await fetch("?handler=Commit", {
+                    method: "POST",
+                    headers: {
+                        "RequestVerificationToken": tokenInput.value
+                    },
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    workflowStatus.innerText = "Commit failed.";
+                    return;
+                }
+
+                location.reload();
+            });
+        }
+
+        // =====================================================
+        // 📊 PROGRESS POLLING
+        // =====================================================
+        function pollProgress(completionMessage) {
+
+            const interval = setInterval(async () => {
+
+                const progressResponse =
+                    await fetch("?handler=Progress");
+
+                const data =
+                    await progressResponse.json();
+
+                workflowStatus.innerText =
+                    `Processing ${data.processed} / ${data.total} - ${data.currentFile}`;
+
+                if (!data.isRunning) {
+                    clearInterval(interval);
+                    workflowStatus.innerText = completionMessage;
+                    location.reload();
+                }
+
+            }, 1000);
+        }
+
+    });
+</script>
+
+@functions {
+
+    /// <summary>
+    /// Recursively renders the preview file structure.
+    /// </summary>
+    void RenderNode(PIM.Web.Models.FileNode node)
+    {
+        if (node.IsFolder)
+        {
+            <li>
+
+                <details @(node.IsExpanded ? "open" : "")>
+
+                    <summary>
+                        📁 @node.Name
+                        @(node.FileCount > 1
+                            ? $"({node.FileCount})"
+                            : "")
+                    </summary>
+
+                    @if (node.Children.Any())
+                    {
+                        <ul>
+
+                            @foreach (var child in node.Children)
+                            {
+                                RenderNode(child);
+                            }
+
+                        </ul>
+                    }
+
+                </details>
+
+            </li>
+        }
+        else
+        {
+            var movie = node.Movie;
+
+            var textClass =
+                movie?.HasError == true ? "text-error" :
+                movie?.NeedsReview == true ? "text-review" :
+                (movie?.IsDuplicate == true
+                    && !movie.KeepRecommended
+                    && !movie.IsAlternateVersion)
+                        ? "text-delete" :
+                movie?.KeepRecommended == true ? "text-best" :
+                movie?.IsAlternateVersion == true ? "text-alt" :
+                "";
+
+            var tagClass =
+                movie?.HasError == true ? "tag tag-error" :
+                movie?.NeedsReview == true ? "tag tag-review" :
+                (movie?.IsDuplicate == true
+                    && !movie.KeepRecommended
+                    && !movie.IsAlternateVersion)
+                        ? "tag tag-delete" :
+                movie?.KeepRecommended == true ? "tag tag-best" :
+                movie?.IsAlternateVersion == true ? "tag tag-alt" :
+                "tag";
+
+            var label =
+                movie?.HasError == true ? "❌ FIX" :
+                movie?.NeedsReview == true ? "🔍 REVIEW" :
+                (movie?.IsDuplicate == true
+                    && !movie.KeepRecommended
+                    && !movie.IsAlternateVersion)
+                        ? "🗑 DELETE" :
+                movie?.KeepRecommended == true ? "⭐ KEEP" :
+                movie?.IsAlternateVersion == true ? "🎬 ALT" :
+                "";
+
+            <li style="margin-bottom:4px;">
+
+                <span class="@textClass">
+                    📄 @node.Name
+                </span>
+
+                @if (!string.IsNullOrEmpty(label))
+                {
+                    <span class="@tagClass">
+                        @label
+                    </span>
+                }
+
+            </li>
+        }
+    }
+
+}

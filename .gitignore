@@ -1,0 +1,21 @@
+# Build output
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Logs and caches
+*.log
+*.cache
+
+# Test results
+TestResults/
+
+# VS Code
+.vscode/
+
+# Local settings
+appsettings.Development.json
