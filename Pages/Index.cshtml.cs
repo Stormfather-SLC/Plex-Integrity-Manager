@@ -13,18 +13,11 @@ namespace PIM.Web.Pages
     ///
     /// RESPONSIBILITIES:
     /// - Display processed movie results from cache
-    /// - Trigger the scan pipeline
+    /// - Trigger file scanning
     /// - Trigger metadata enrichment
     /// - Provide real-time progress updates
-    /// - Build a preview tree of the final output structure
-    ///
-    /// WORKFLOW:
-    /// 1. Scan Library
-    /// 2. Enrich Metadata
-    /// 3. Detect Duplicates
-    /// 4. Generate Rename Preview
-    /// 5. Dry Run
-    /// 6. Commit Changes
+    /// - Build the preview file tree
+    /// - Handle dry run / commit actions
     /// </summary>
     public class IndexModel : PageModel
     {
@@ -49,26 +42,38 @@ namespace PIM.Web.Pages
         [BindProperty(SupportsGet = true)]
         public bool ShowOnlyRecommended { get; set; }
 
+        // =========================================================
+        // 📁 Library Settings
+        // =========================================================
+
+        /// <summary>
+        /// Source folder to scan for movie files.
+        /// Example: Y:\Transfer Movies
+        /// </summary>
+        [BindProperty]
+        public string ScanPath { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Destination folder where organized movies will be written.
+        /// Example: G:\[PLEX]\Movies
+        /// </summary>
+        [BindProperty]
+        public string OutputPath { get; set; } = string.Empty;
+
         /// <summary>
         /// When true, PIM simulates all file operations without making
         /// any changes to disk.
-        ///
-        /// Default = true for safety.
-        ///
-        /// Dry Run should remain enabled unless the user explicitly
-        /// chooses to perform real file moves and deletions.
         /// </summary>
         [BindProperty]
         public bool DryRun { get; set; } = true;
 
         /// <summary>
         /// Movies displayed in the UI.
-        /// Loaded from IMemoryCache.
         /// </summary>
         public List<Movie> Movies { get; set; } = new();
 
         /// <summary>
-        /// Preview tree showing proposed output folder structure.
+        /// Preview tree showing the proposed output structure.
         /// </summary>
         public FileNode? PreviewTree { get; set; }
 
@@ -106,6 +111,10 @@ namespace PIM.Web.Pages
         {
             ShowOnlyRecommended = showOnlyRecommended;
 
+            // Load configurable library paths from appsettings.json.
+            ScanPath = _config["PIM:ScanPath"] ?? string.Empty;
+            OutputPath = _config["PIM:OutputPath"] ?? string.Empty;
+
             if (_cache.TryGetValue("MovieScan", out List<Movie>? cachedMovies)
                 && cachedMovies != null)
             {
@@ -116,7 +125,9 @@ namespace PIM.Web.Pages
                     .ToList();
 
                 Movies = showOnlyRecommended
-                    ? sorted.Where(m => !m.IsDuplicate || m.KeepRecommended).ToList()
+                    ? sorted
+                        .Where(m => !m.IsDuplicate || m.KeepRecommended)
+                        .ToList()
                     : sorted;
 
                 BuildPreviewTree();
@@ -150,14 +161,8 @@ namespace PIM.Web.Pages
         // =========================================================
 
         /// <summary>
-        /// Performs only file discovery and filename parsing.
-        ///
-        /// This step:
-        /// - Finds all supported video files
-        /// - Extracts title/year from filenames
-        /// - Stores results in cache
-        ///
-        /// It does NOT call OMDb yet.
+        /// Performs file discovery and filename parsing.
+        /// This step does NOT call OMDb.
         /// </summary>
         public IActionResult OnPostRescan()
         {
@@ -165,7 +170,7 @@ namespace PIM.Web.Pages
 
             _progress.Total = 0;
             _progress.Processed = 0;
-            _progress.CurrentFile = "";
+            _progress.CurrentFile = string.Empty;
             _progress.IsRunning = true;
 
             _ = Task.Run(() =>
@@ -190,20 +195,22 @@ namespace PIM.Web.Pages
                             Status = "Discovered"
                         };
 
-                        // Parse title and year from filename
+                        // Parse title and year from filename.
                         _parser.Parse(movie);
 
                         movies.Add(movie);
 
+                        // Update progress.
                         _progress.CurrentFile = fileInfo.Name;
                         _progress.Processed++;
                     }
 
-                    // Save parsed results to cache
+                    // Save parsed results to cache.
                     _cache.Set("MovieScan", movies, TimeSpan.FromMinutes(30));
                 }
                 finally
                 {
+                    _progress.CurrentFile = string.Empty;
                     _progress.IsRunning = false;
                 }
             });
@@ -216,12 +223,8 @@ namespace PIM.Web.Pages
         // =========================================================
 
         /// <summary>
-        /// Calls OMDb for each movie missing an IMDb ID.
-        ///
-        /// After enrichment:
-        /// - Duplicate detection runs
-        /// - Rename preview is generated
-        /// - Results are saved back to cache
+        /// Calls OMDb for movies missing an IMDb ID.
+        /// Then runs duplicate detection and rename preview.
         /// </summary>
         public async Task<IActionResult> OnPostEnrichAsync()
         {
@@ -233,47 +236,69 @@ namespace PIM.Web.Pages
 
             var outputPath = _config["PIM:OutputPath"];
 
-            // Reset progress
-            _progress.Total = movies.Count;
-            _progress.Processed = 0;
-            _progress.CurrentFile = "";
-            _progress.IsRunning = true;
+            // Only enrich movies that do not already have an IMDb ID.
+            var moviesToEnrich = movies
+                .Where(m => string.IsNullOrWhiteSpace(m.ImdbId))
+                .ToList();
 
-            try
+            if (moviesToEnrich.Count > 0)
             {
-                foreach (var movie in movies.Where(m => string.IsNullOrWhiteSpace(m.ImdbId)))
+                _progress.Total = moviesToEnrich.Count;
+                _progress.Processed = 0;
+                _progress.CurrentFile = string.Empty;
+                _progress.IsRunning = true;
+
+                try
                 {
-                    _progress.CurrentFile = movie.FileName;
+                    // Read the delay from appsettings.json.
+                    // Default to 250 ms if the setting is missing.
+                    var delayMs = _config.GetValue<int>("PIM:MetadataDelayMs", 250);
 
-                    await _metadata.EnrichAsync(movie);
-
-                    // If metadata lookup failed, flag for review
-                    if (string.IsNullOrWhiteSpace(movie.ImdbId))
+                    foreach (var movie in moviesToEnrich)
                     {
-                        movie.NeedsReview = true;
-                        movie.Status = "Metadata Not Found";
-                    }
-                    else
-                    {
-                        movie.Status = "Metadata Enriched";
-                    }
+                        // Show the original filename in the progress display.
+                        _progress.CurrentFile = movie.FileName;
 
-                    _progress.Processed++;
+                        // Retrieve metadata from OMDb.
+                        await _metadata.EnrichAsync(movie);
+
+                        // Pause briefly between API calls.
+                        // This helps avoid rate limiting and makes progress visible.
+                        if (delayMs > 0)
+                        {
+                            await Task.Delay(delayMs);
+                        }
+
+                        // If metadata lookup failed, flag the movie for review.
+                        if (string.IsNullOrWhiteSpace(movie.ImdbId))
+                        {
+                            movie.NeedsReview = true;
+                            movie.Status = "Metadata Not Found";
+                        }
+                        else
+                        {
+                            movie.Status = "Metadata Enriched";
+                        }
+
+                        // Increment progress after processing the current movie.
+                        _progress.Processed++;
+                    }
                 }
-
-                // Detect duplicates now that IMDb IDs are available
-                _duplicates.Process(movies);
-
-                // Generate rename preview
-                _rename.GeneratePreview(movies, outputPath);
-
-                // Save updated list to cache
-                _cache.Set("MovieScan", movies, TimeSpan.FromMinutes(30));
+                finally
+                {
+                    _progress.CurrentFile = string.Empty;
+                    _progress.IsRunning = false;
+                }
             }
-            finally
-            {
-                _progress.IsRunning = false;
-            }
+
+            // Detect duplicates now that metadata is available.
+            _duplicates.Process(movies);
+
+            // Generate proposed target paths.
+            _rename.GeneratePreview(movies, outputPath);
+
+            // Save updated results to cache.
+            _cache.Set("MovieScan", movies, TimeSpan.FromMinutes(30));
 
             return RedirectToPage(new
             {
@@ -305,8 +330,12 @@ namespace PIM.Web.Pages
             }
 
             // TODO:
-            // This will eventually call:
-            // var results = _rename.ExecuteChanges(movies, DryRun);
+            // Execute only approved movies.
+            // var approvedMovies = movies
+            //     .Where(m => m.ApprovedForCommit)
+            //     .ToList();
+            //
+            // _rename.ExecuteChanges(approvedMovies, DryRun);
 
             TempData["Message"] = DryRun
                 ? "Dry Run completed. No files were modified."
@@ -322,6 +351,10 @@ namespace PIM.Web.Pages
         // 🌳 Build Preview Tree
         // =========================================================
 
+        /// <summary>
+        /// Builds the preview tree that shows the proposed folder and
+        /// file structure after rename and organization.
+        /// </summary>
         private void BuildPreviewTree()
         {
             var outputPath = _config["PIM:OutputPath"];
