@@ -379,10 +379,12 @@ else
 <!-- =========================================================
      ⚡ WORKFLOW SCRIPT
 ========================================================= -->
-
 <script>
     document.addEventListener("DOMContentLoaded", function () {
 
+        // =====================================================
+        // 🔐 Anti-forgery token used for POST requests
+        // =====================================================
         const tokenInput =
             document.querySelector('input[name="__RequestVerificationToken"]');
 
@@ -391,6 +393,9 @@ else
             return;
         }
 
+        // =====================================================
+        // 📢 Status area shown in the Workflow panel
+        // =====================================================
         const workflowStatus =
             document.getElementById("workflowStatus");
 
@@ -404,6 +409,11 @@ else
 
                 workflowStatus.innerText = "Starting scan...";
 
+                // Start polling immediately so the UI updates
+                // while the server is processing.
+                pollProgress("Scan complete!");
+
+                // Launch scan in the background.
                 const response = await fetch("?handler=Rescan", {
                     method: "POST",
                     headers: {
@@ -413,10 +423,7 @@ else
 
                 if (!response.ok) {
                     workflowStatus.innerText = "Scan failed.";
-                    return;
                 }
-
-                pollProgress("Scan complete!");
             });
         }
 
@@ -430,6 +437,11 @@ else
 
                 workflowStatus.innerText = "Retrieving metadata...";
 
+                // Start polling immediately so the UI updates
+                // while metadata is being retrieved.
+                pollProgress("Metadata retrieval complete!");
+
+                // Launch metadata retrieval in the background.
                 const response = await fetch("?handler=Enrich", {
                     method: "POST",
                     headers: {
@@ -438,11 +450,9 @@ else
                 });
 
                 if (!response.ok) {
-                    workflowStatus.innerText = "Metadata enrichment failed.";
-                    return;
+                    workflowStatus.innerText =
+                        "Metadata enrichment failed.";
                 }
-
-                pollProgress("Metadata retrieval complete!");
             });
         }
 
@@ -450,6 +460,8 @@ else
         // 📊 PROGRESS POLLING
         // =====================================================
         function pollProgress(completionMessage) {
+
+            const startTime = Date.now();
 
             const interval = setInterval(async () => {
 
@@ -459,16 +471,71 @@ else
                 const data =
                     await progressResponse.json();
 
-                workflowStatus.innerText =
-                    `Processing ${data.processed} of ${data.total}: ${data.currentFile}`;
+                // ---------------------------------------------
+                // ⏱ Calculate elapsed time
+                // ---------------------------------------------
+                const elapsedMs = Date.now() - startTime;
+                const elapsedSeconds =
+                    Math.floor(elapsedMs / 1000);
 
+                // ---------------------------------------------
+                // 📈 Estimate remaining time
+                // ---------------------------------------------
+                let remainingText = "Calculating...";
+
+                if (data.processed > 0 && data.total > 0) {
+                    const avgSecondsPerItem =
+                        elapsedSeconds / data.processed;
+
+                    const remainingSeconds = Math.round(
+                        avgSecondsPerItem *
+                        (data.total - data.processed)
+                    );
+
+                    remainingText =
+                        formatTime(remainingSeconds);
+                }
+
+                // ---------------------------------------------
+                // 📝 Update status text
+                // ---------------------------------------------
+                workflowStatus.innerHTML =
+                    `<strong>Processing ${data.processed} of ${data.total}</strong><br>` +
+                    `Current File: ${data.currentFile || "Starting..."}<br>` +
+                    `Elapsed: ${formatTime(elapsedSeconds)}<br>` +
+                    `Estimated Remaining: ${remainingText}`;
+
+                // ---------------------------------------------
+                // ✅ Completed
+                // ---------------------------------------------
                 if (!data.isRunning) {
                     clearInterval(interval);
-                    workflowStatus.innerText = completionMessage;
+                    workflowStatus.innerHTML = completionMessage;
                     location.reload();
                 }
 
             }, 1000);
+        }
+
+        // =====================================================
+        // ⏱ Format seconds as HH:MM:SS
+        // =====================================================
+        function formatTime(totalSeconds) {
+
+            const hours =
+                Math.floor(totalSeconds / 3600);
+
+            const minutes =
+                Math.floor((totalSeconds % 3600) / 60);
+
+            const seconds =
+                totalSeconds % 60;
+
+            return [
+                hours.toString().padStart(2, "0"),
+                minutes.toString().padStart(2, "0"),
+                seconds.toString().padStart(2, "0")
+            ].join(":");
         }
     });
 </script>
