@@ -404,8 +404,8 @@ namespace PIM.Web.Pages
                     }
                     },
                     "PIM": {
-                    "ScanPath": "{{ScanPath}}",
-                    "OutputPath": "{{OutputPath}}",
+                    "ScanPath": {{JsonSerializer.Serialize(ScanPath)}},
+                    "OutputPath": {{JsonSerializer.Serialize(OutputPath)}},
                     "MetadataDelayMs": {{delayMs}}
                     },
                     "AllowedHosts": "*"
