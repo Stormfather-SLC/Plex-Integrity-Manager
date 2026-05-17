@@ -334,13 +334,13 @@ namespace PIM.Web.Pages
                 return RedirectToPage();
             }
 
-            // TODO:
-            // Execute only approved movies.
-            // var approvedMovies = movies
-            //     .Where(m => m.ApprovedForCommit)
-            //     .ToList();
-            //
-            // _rename.ExecuteChanges(approvedMovies, DryRun);
+            // Process only movies approved for commit.
+            var approvedMovies = movies
+                .Where(m => m.ApprovedForCommit)
+                .ToList();
+
+            // Execute the file operations.
+            _rename.ExecuteChanges(approvedMovies, DryRun);
 
             TempData["Message"] = DryRun
                 ? "Dry Run completed. No files were modified."
