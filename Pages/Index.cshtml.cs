@@ -341,10 +341,35 @@ namespace PIM.Web.Pages
 
             // Execute the file operations.
             _rename.ExecuteChanges(approvedMovies, DryRun);
+            var moveCount = approvedMovies.Count(m => !m.IsDuplicate || m.KeepRecommended);
+            var duplicateDeleteCount = movies.Count(m =>
+                m.IsDuplicate &&
+                !m.KeepRecommended &&
+                !m.IsAlternateVersion);
 
-            TempData["Message"] = DryRun
-                ? "Dry Run completed. No files were modified."
-                : "Changes applied successfully.";
+            var reviewCount = movies.Count(m => m.NeedsReview);
+            var errorCount = movies.Count(m => m.HasError);
+
+            // Save updated statuses back to cache.
+            _cache.Set("MovieScan", movies, TimeSpan.FromMinutes(30));
+
+            if (DryRun)
+            {
+                TempData["Message"] =
+                    $"Dry Run Complete: " +
+                    $"{moveCount} files would be moved, " +
+                    $"{duplicateDeleteCount} duplicates would be skipped/deleted, " +
+                    $"{reviewCount} need review, " +
+                    $"{errorCount} errors found.";
+            }
+            else
+            {
+                TempData["Message"] =
+                    $"Changes Applied Successfully: " +
+                    $"{moveCount} files processed, " +
+                    $"{reviewCount} need review, " +
+                    $"{errorCount} errors found.";
+            }
 
             return RedirectToPage(new
             {

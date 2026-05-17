@@ -4,7 +4,12 @@
     ViewData["Title"] = "Plex Intake Manager";
 }
 
+<!-- =========================================================
+     🏠 PAGE HEADER
+========================================================= -->
+
 <h1>Plex Intake Manager (PIM)</h1>
+
 @if (TempData["Message"] != null)
 {
     <div class="alert alert-info mt-3">
@@ -15,6 +20,7 @@
 <!-- =========================================================
      📁 LIBRARY SETTINGS
 ========================================================= -->
+
 <div class="card mb-4">
     <div class="card-header">
         <strong>Library Settings</strong>
@@ -40,7 +46,7 @@
                 <input asp-for="OutputPath" class="form-control" />
             </div>
 
-            <!-- Save Settings Button -->
+            <!-- Save Settings -->
             <button type="submit" class="btn btn-secondary">
                 💾 Save Settings
             </button>
@@ -50,10 +56,10 @@
 </div>
 
 <!-- =========================================================
-     🎨 PIM VISUAL THEME
+     🎨 VISUAL THEME
 ========================================================= -->
-<style>
 
+<style>
     .row-error {
         background-color: #f8d7da;
     }
@@ -126,13 +132,12 @@
         background-color: #d4edda;
         color: #0f5132;
     }
-
 </style>
 
 <!-- =========================================================
      🔄 WORKFLOW CONTROL PANEL
 ========================================================= -->
-
+<!-- Hidden form used by JavaScript for Scan and Enrich -->
 <form method="post" id="workflowForm">
     @Html.AntiForgeryToken()
 </form>
@@ -143,7 +148,7 @@
         <strong>Workflow:</strong>
     </div>
 
-    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
 
         <!-- Full Scan -->
         <button type="button" id="scanBtn">
@@ -157,20 +162,27 @@
             🌐 Retrieve Metadata
         </button>
 
-        <!-- Apply Changes -->
-        <button type="button"
-                id="commitBtn"
-                disabled="@(!Model.Movies.Any(m => m.ApprovedForCommit))">
-            🚀 Apply Changes
-        </button>
+        <!-- Apply Changes Form -->
+        <form method="post"
+              asp-page-handler="Commit"
+              style="display:inline-flex; align-items:center; gap:10px; margin:0;">
+            @Html.AntiForgeryToken()
 
-        <!-- Dry Run -->
-        <label style="display:flex; align-items:center; gap:6px; margin-left:10px;">
-            <input asp-for="DryRun" />
-            <span>Dry Run</span>
-        </label>
+            <!-- Dry Run -->
+            <label style="display:flex; align-items:center; gap:6px; margin:0;">
+                <input asp-for="DryRun" />
+                <span>Dry Run</span>
+            </label>
 
-        <!-- Cancel -->
+            <!-- Apply Changes -->
+            <button type="submit"
+                    class="btn btn-success"
+                    disabled="@(!Model.Movies.Any(m => m.ApprovedForCommit))">
+                🚀 Apply Changes
+            </button>
+        </form>
+
+        <!-- Cancel (reserved for future use) -->
         <button type="button"
                 id="cancelBtn"
                 disabled>
@@ -179,6 +191,7 @@
 
     </div>
 
+    <!-- Real-time status text -->
     <div id="workflowStatus"
          style="margin-top:10px; font-style:italic;">
         Ready
@@ -220,7 +233,6 @@
     </thead>
 
     <tbody>
-
         @foreach (var movie in Model.Movies)
         {
             var rowClass =
@@ -236,6 +248,7 @@
 
             <tr class="@rowClass">
 
+                <!-- Commit Approval -->
                 <td style="text-align:center;">
                     <input type="checkbox"
                            @(movie.ApprovedForCommit ? "checked" : "")
@@ -246,6 +259,7 @@
                 <td>@movie.Year</td>
                 <td>@(movie.FileSizeBytes / (1024 * 1024))</td>
 
+                <!-- Status -->
                 <td>
                     @if (movie.HasError)
                     {
@@ -273,6 +287,7 @@
                     }
                 </td>
 
+                <!-- Recommended Action -->
                 <td>
                     @if (movie.HasError)
                     {
@@ -300,6 +315,7 @@
                     }
                 </td>
 
+                <!-- Review Reason -->
                 <td>
                     @if (movie.NeedsReview)
                     {
@@ -309,11 +325,13 @@
                     }
                 </td>
 
+                <!-- Original Path -->
                 <td style="font-size:0.8em; color:#666;">
                     <div style="font-weight:bold;">OLD</div>
                     @movie.OriginalFilePath
                 </td>
 
+                <!-- Target Path -->
                 <td>
                     <div style="color:green; font-weight:bold;">NEW</div>
                     <div style="font-size:0.85em;">
@@ -323,9 +341,7 @@
 
             </tr>
         }
-
     </tbody>
-
 </table>
 
 <!-- =========================================================
@@ -378,47 +394,6 @@ else
         const workflowStatus =
             document.getElementById("workflowStatus");
 
-        const settingsStatus =
-            document.getElementById("settingsStatus");
-
-        // =====================================================
-        // 💾 SAVE SETTINGS
-        // =====================================================
-        const saveSettingsBtn =
-            document.getElementById("saveSettingsBtn");
-
-        if (saveSettingsBtn) {
-            saveSettingsBtn.addEventListener("click", async () => {
-
-                const sourcePath =
-                    document.getElementById("sourcePath").value;
-
-                const destinationPath =
-                    document.getElementById("destinationPath").value;
-
-                settingsStatus.innerText = "Saving...";
-
-                const formData = new FormData();
-                formData.append("ScanPath", sourcePath);
-                formData.append("OutputPath", destinationPath);
-
-                const response = await fetch("?handler=SaveSettings", {
-                    method: "POST",
-                    headers: {
-                        "RequestVerificationToken": tokenInput.value
-                    },
-                    body: formData
-                });
-
-                if (response.ok) {
-                    settingsStatus.innerText = "Settings saved.";
-                }
-                else {
-                    settingsStatus.innerText = "Save failed.";
-                }
-            });
-        }
-
         // =====================================================
         // 🔄 FULL SCAN
         // =====================================================
@@ -455,8 +430,6 @@ else
 
                 workflowStatus.innerText = "Retrieving metadata...";
 
-                pollProgress("Metadata retrieval complete!");
-
                 const response = await fetch("?handler=Enrich", {
                     method: "POST",
                     headers: {
@@ -466,46 +439,10 @@ else
 
                 if (!response.ok) {
                     workflowStatus.innerText = "Metadata enrichment failed.";
-                }
-            });
-        }
-
-        // =====================================================
-        // 🚀 APPLY CHANGES
-        // =====================================================
-        const commitBtn = document.getElementById("commitBtn");
-
-        if (commitBtn) {
-            commitBtn.addEventListener("click", async () => {
-
-                const dryRunCheckbox =
-                    document.getElementById("DryRun");
-
-                const isDryRun = dryRunCheckbox
-                    ? dryRunCheckbox.checked
-                    : true;
-
-                workflowStatus.innerText = isDryRun
-                    ? "Running dry run..."
-                    : "Applying changes...";
-
-                const formData = new FormData();
-                formData.append("DryRun", isDryRun);
-
-                const response = await fetch("?handler=Commit", {
-                    method: "POST",
-                    headers: {
-                        "RequestVerificationToken": tokenInput.value
-                    },
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    workflowStatus.innerText = "Commit failed.";
                     return;
                 }
 
-                location.reload();
+                pollProgress("Metadata retrieval complete!");
             });
         }
 
@@ -523,7 +460,7 @@ else
                     await progressResponse.json();
 
                 workflowStatus.innerText =
-                    `Getting metadata (${data.processed} of ${data.total}): ${data.currentFile}`;
+                    `Processing ${data.processed} of ${data.total}: ${data.currentFile}`;
 
                 if (!data.isRunning) {
                     clearInterval(interval);
@@ -533,10 +470,12 @@ else
 
             }, 1000);
         }
-
     });
 </script>
 
+<!-- =========================================================
+     🌳 PREVIEW TREE RENDERER
+========================================================= -->
 @functions {
 
     void RenderNode(PIM.Web.Models.FileNode node)
@@ -547,12 +486,10 @@ else
                 <details @(node.IsExpanded ? "open" : "")>
                     <summary>
                         📁 @node.Name
-                        @(node.FileCount > 1
-                                    ? $"({node.FileCount})"
-                                    : "")
-        </summary>
+                        @(node.FileCount > 1 ? $"({node.FileCount})" : "")
+                    </summary>
 
-        @if (node.Children.Any())
+                    @if (node.Children.Any())
                     {
                         <ul>
                             @foreach (var child in node.Children)
