@@ -210,172 +210,214 @@
 <br />
 
 <!-- =========================================================
-     📊 MOVIE DECISION TABLE
+     📑 RESULTS TABS
 ========================================================= -->
+<div class="mt-4">
 
-<table border="1"
-       cellpadding="5"
-       cellspacing="0"
-       style="width:100%; border-collapse:collapse;">
+    <!-- Tab Headers -->
+    <ul class="nav nav-tabs" id="resultsTabs" role="tablist">
 
-    <thead style="background-color:#f2f2f2;">
-        <tr>
-            <th style="text-align:center; width:70px;">Commit</th>
-            <th>Title</th>
-            <th>Year</th>
-            <th>Size (MB)</th>
-            <th>Status</th>
-            <th>Action</th>
-            <th>Review Reason</th>
-            <th>Original (Before)</th>
-            <th>New (After)</th>
-        </tr>
-    </thead>
+        <!-- Movie Results -->
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active"
+                    id="movies-tab"
+                    data-bs-toggle="tab"
+                    data-bs-target="#movies-pane"
+                    type="button"
+                    role="tab">
+                🎬 Movie Results
+            </button>
+        </li>
 
-    <tbody>
-        @foreach (var movie in Model.Movies)
-        {
-            var rowClass =
-            movie.HasError ? "row-error" :
-            movie.NeedsReview ? "row-review" :
-            (movie.IsDuplicate &&
-            !movie.KeepRecommended &&
-            !movie.IsAlternateVersion)
-            ? "row-delete" :
-            movie.KeepRecommended ? "row-best" :
-            movie.IsAlternateVersion ? "row-alt" :
-            "";
-
-            <tr class="@rowClass">
-
-                <!-- Commit Approval -->
-                <td style="text-align:center;">
-                    <input type="checkbox"
-                           @(movie.ApprovedForCommit ? "checked" : "")
-                           disabled />
-                </td>
-
-                <td>@movie.Title</td>
-                <td>@movie.Year</td>
-                <td>@(movie.FileSizeBytes / (1024 * 1024))</td>
-
-                <!-- Status -->
-                <td>
-                    @if (movie.HasError)
-                    {
-                        <span>❌ Error</span>
-                    }
-                    else if (movie.NeedsReview)
-                    {
-                        <span>🔍 Needs Review</span>
-                    }
-                    else if (movie.KeepRecommended)
-                    {
-                        <span>⭐ Best Version</span>
-                    }
-                    else if (movie.IsAlternateVersion)
-                    {
-                        <span>🎬 Alternate Version</span>
-                    }
-                    else if (movie.IsDuplicate)
-                    {
-                        <span>🗑 Duplicate</span>
-                    }
-                    else
-                    {
-                        <span>✔ Unique</span>
-                    }
-                </td>
-
-                <!-- Recommended Action -->
-                <td>
-                    @if (movie.HasError)
-                    {
-                        <span style="color:#721c24;">Fix</span>
-                    }
-                    else if (movie.NeedsReview)
-                    {
-                        <span style="color:#004085;">Review</span>
-                    }
-                    else if (movie.KeepRecommended)
-                    {
-                        <span style="color:#856404;">Keep</span>
-                    }
-                    else if (movie.IsAlternateVersion)
-                    {
-                        <span style="color:#155724;">Keep</span>
-                    }
-                    else if (movie.IsDuplicate)
-                    {
-                        <span style="color:#8a4b00;">Delete</span>
-                    }
-                    else
-                    {
-                        <span>None</span>
-                    }
-                </td>
-
-                <!-- Review Reason -->
-                <td>
-                    @if (movie.NeedsReview)
-                    {
-                        <span style="font-size:0.8em; color:#004085;">
-                            @movie.ReviewReason
-                        </span>
-                    }
-                </td>
-
-                <!-- Original Path -->
-                <td style="font-size:0.8em; color:#666;">
-                    <div style="font-weight:bold;">OLD</div>
-                    @movie.OriginalFilePath
-                </td>
-
-                <!-- Target Path -->
-                <td>
-                    <div style="color:green; font-weight:bold;">NEW</div>
-                    <div style="font-size:0.85em;">
-                        @movie.TargetPath
-                    </div>
-                </td>
-
-            </tr>
-        }
-    </tbody>
-</table>
-
-<!-- =========================================================
-     🌳 PREVIEW FILE STRUCTURE
-========================================================= -->
-
-<h2>Preview File Structure</h2>
-
-<p style="color:#084298;">
-    🔍 @Model.Movies.Count(m => m.NeedsReview)
-    movies require review and are not shown.
-</p>
-
-<p style="color:#842029;">
-    ❌ @Model.Movies.Count(m => m.HasError)
-    movies have errors and are excluded.
-</p>
-
-@if (Model.PreviewTree != null)
-{
-    <ul>
-        @{
-            RenderNode(Model.PreviewTree);
-        }
+        <!-- Preview Tree -->
+        <li class="nav-item" role="presentation">
+            <button class="nav-link"
+                    id="preview-tab"
+                    data-bs-toggle="tab"
+                    data-bs-target="#preview-pane"
+                    type="button"
+                    role="tab">
+                🌳 Preview Tree
+            </button>
+        </li>
     </ul>
-}
-else
-{
-    <p style="color:gray;">
-        No preview available.
-        Run a scan to generate the file structure.
-    </p>
-}
 
+    <!-- Tab Content -->
+    <div class="tab-content border border-top-0 rounded-bottom p-3 bg-white shadow-sm">
+
+        <!-- =================================================
+             🎬 MOVIE RESULTS TAB
+        ================================================== -->
+        <div class="tab-pane fade show active"
+             id="movies-pane"
+             role="tabpanel">
+
+            <div style="max-height:700px; overflow:auto;">
+
+                <table border="1"
+                       cellpadding="5"
+                       cellspacing="0"
+                       style="width:100%; border-collapse:collapse;">
+
+                    <thead style="background-color:#f2f2f2;">
+                        <tr>
+                            <th style="text-align:center; width:70px;">Commit</th>
+                            <th>Title</th>
+                            <th>Year</th>
+                            <th>Size (MB)</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                            <th>Review Reason</th>
+                            <th>Original (Before)</th>
+                            <th>New (After)</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        @foreach (var movie in Model.Movies)
+                        {
+                            var rowClass =
+                            movie.HasError ? "row-error" :
+                            movie.NeedsReview ? "row-review" :
+                            (movie.IsDuplicate &&
+                            !movie.KeepRecommended &&
+                            !movie.IsAlternateVersion)
+                            ? "row-delete" :
+                            movie.KeepRecommended ? "row-best" :
+                            movie.IsAlternateVersion ? "row-alt" :
+                            "";
+
+                            <tr class="@rowClass">
+
+                                <td style="text-align:center;">
+                                    <input type="checkbox"
+                                           @(movie.ApprovedForCommit ? "checked" : "")
+                                           disabled />
+                                </td>
+
+                                <td>@movie.Title</td>
+                                <td>@movie.Year</td>
+                                <td>@(movie.FileSizeBytes / (1024 * 1024))</td>
+
+                                <td>
+                                    @if (movie.HasError)
+                                    {
+                                        <span>❌ Error</span>
+                                    }
+                                    else if (movie.NeedsReview)
+                                    {
+                                        <span>🔍 Needs Review</span>
+                                    }
+                                    else if (movie.KeepRecommended)
+                                    {
+                                        <span>⭐ Best Version</span>
+                                    }
+                                    else if (movie.IsAlternateVersion)
+                                    {
+                                        <span>🎬 Alternate Version</span>
+                                    }
+                                    else if (movie.IsDuplicate)
+                                    {
+                                        <span>🗑 Duplicate</span>
+                                    }
+                                    else
+                                    {
+                                        <span>✔ Unique</span>
+                                    }
+                                </td>
+
+                                <td>
+                                    @if (movie.HasError)
+                                    {
+                                        <span style="color:#721c24;">Fix</span>
+                                    }
+                                    else if (movie.NeedsReview)
+                                    {
+                                        <span style="color:#004085;">Review</span>
+                                    }
+                                    else if (movie.KeepRecommended)
+                                    {
+                                        <span style="color:#856404;">Keep</span>
+                                    }
+                                    else if (movie.IsAlternateVersion)
+                                    {
+                                        <span style="color:#155724;">Keep</span>
+                                    }
+                                    else if (movie.IsDuplicate)
+                                    {
+                                        <span style="color:#8a4b00;">Delete</span>
+                                    }
+                                    else
+                                    {
+                                        <span>None</span>
+                                    }
+                                </td>
+
+                                <td>
+                                    @if (movie.NeedsReview)
+                                    {
+                                        <span style="font-size:0.8em; color:#004085;">
+                                            @movie.ReviewReason
+                                        </span>
+                                    }
+                                </td>
+
+                                <td style="font-size:0.8em; color:#666;">
+                                    <div style="font-weight:bold;">OLD</div>
+                                    @movie.OriginalFilePath
+                                </td>
+
+                                <td>
+                                    <div style="color:green; font-weight:bold;">NEW</div>
+                                    <div style="font-size:0.85em;">
+                                        @movie.TargetPath
+                                    </div>
+                                </td>
+
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- =================================================
+             🌳 PREVIEW TREE TAB
+        ================================================== -->
+        <div class="tab-pane fade"
+             id="preview-pane"
+             role="tabpanel">
+
+            <p style="color:#084298;">
+                🔍 @Model.Movies.Count(m => m.NeedsReview)
+                movies require review and are not shown.
+            </p>
+
+            <p style="color:#842029;">
+                ❌ @Model.Movies.Count(m => m.HasError)
+                movies have errors and are excluded.
+            </p>
+
+            @if (Model.PreviewTree != null)
+            {
+                <div style="max-height:700px; overflow:auto;">
+                    <ul>
+                        @{
+                            RenderNode(Model.PreviewTree);
+                        }
+                    </ul>
+                </div>
+            }
+            else
+            {
+                <p style="color:gray;">
+                    No preview available.
+                    Run a scan to generate the file structure.
+                </p>
+            }
+        </div>
+    </div>
+</div>
 <!-- =========================================================
      ⚡ WORKFLOW SCRIPT
 ========================================================= -->
