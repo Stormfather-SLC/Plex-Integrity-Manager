@@ -5,6 +5,7 @@ using PIM.Core.Interfaces;
 using PIM.Core.Models;
 using PIM.Web.Models;
 using PIM.Web.Services;
+using System.Text.Json;
 
 namespace PIM.Web.Pages
 {
@@ -59,6 +60,10 @@ namespace PIM.Web.Pages
         /// </summary>
         [BindProperty]
         public string OutputPath { get; set; } = string.Empty;
+        /// <summary>
+        /// Message displayed after saving settings.
+        /// </summary>
+        public string? SettingsMessage { get; set; }
 
         /// <summary>
         /// When true, PIM simulates all file operations without making
@@ -368,6 +373,58 @@ namespace PIM.Web.Pages
             {
                 PreviewTree = null;
             }
+        }
+        // =========================================================
+        // 💾 Save Library Settings
+        // =========================================================
+
+        // =========================================================
+        // 💾 Save Library Settings
+        // =========================================================
+
+        /// <summary>
+        /// Saves ScanPath and OutputPath to appsettings.json.
+        /// </summary>
+        public IActionResult OnPostSaveSettings()
+        {
+            try
+            {
+                var appSettingsPath = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    "appsettings.json");
+
+                var delayMs = _config.GetValue<int>("PIM:MetadataDelayMs", 250);
+
+                var updatedJson = $$"""
+                {
+                    "Logging": {
+                    "LogLevel": {
+                        "Default": "Information",
+                        "Microsoft.AspNetCore": "Warning"
+                    }
+                    },
+                    "PIM": {
+                    "ScanPath": "{{ScanPath}}",
+                    "OutputPath": "{{OutputPath}}",
+                    "MetadataDelayMs": {{delayMs}}
+                    },
+                    "AllowedHosts": "*"
+                }
+                """;
+
+                System.IO.File.WriteAllText(appSettingsPath, updatedJson);
+
+                TempData["Message"] = "Settings saved successfully.";
+            }
+            catch (Exception ex)
+            {
+                TempData["Message"] = $"Error saving settings: {ex.Message}";
+            }
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
         }
     }
 }

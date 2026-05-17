@@ -5,6 +5,12 @@
 }
 
 <h1>Plex Intake Manager (PIM)</h1>
+@if (TempData["Message"] != null)
+{
+    <div class="alert alert-info mt-3">
+        @TempData["Message"]
+    </div>
+}
 
 <!-- =========================================================
      📁 LIBRARY SETTINGS
@@ -15,38 +21,30 @@
     </div>
     <div class="card-body">
 
-        <!-- Source Folder -->
-        <div class="mb-3">
-            <label for="sourcePath" class="form-label">
-                Source Folder (Scan Location)
-            </label>
-            <input type="text"
-                   id="sourcePath"
-                   class="form-control"
-                   value="@Model.ScanPath" />
-        </div>
+        <form method="post" asp-page-handler="SaveSettings">
+            @Html.AntiForgeryToken()
 
-        <!-- Destination Folder -->
-        <div class="mb-3">
-            <label for="destinationPath" class="form-label">
-                Destination Folder (Output Location)
-            </label>
-            <input type="text"
-                   id="destinationPath"
-                   class="form-control"
-                   value="@Model.OutputPath" />
-        </div>
+            <!-- Source Folder -->
+            <div class="mb-3">
+                <label asp-for="ScanPath" class="form-label">
+                    Source Folder (Scan Location)
+                </label>
+                <input asp-for="ScanPath" class="form-control" />
+            </div>
 
-        <!-- Save Settings Button -->
-        <button type="button"
-                id="saveSettingsBtn"
-                class="btn btn-secondary">
-            💾 Save Settings
-        </button>
+            <!-- Destination Folder -->
+            <div class="mb-3">
+                <label asp-for="OutputPath" class="form-label">
+                    Destination Folder (Output Location)
+                </label>
+                <input asp-for="OutputPath" class="form-control" />
+            </div>
 
-        <!-- Status Message -->
-        <span id="settingsStatus"
-              class="ms-3 text-success"></span>
+            <!-- Save Settings Button -->
+            <button type="submit" class="btn btn-secondary">
+                💾 Save Settings
+            </button>
+        </form>
 
     </div>
 </div>
