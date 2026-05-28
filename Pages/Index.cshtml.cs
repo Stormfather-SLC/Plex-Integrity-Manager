@@ -180,6 +180,7 @@ namespace PIM.Web.Pages
         /// </summary>
         public IActionResult OnPostRescan()
         {
+            _cache.Remove("DryRunPreview");
             var rootPath = _config["PIM:ScanPath"];
 
             _progress.Total = 0;
@@ -343,35 +344,67 @@ namespace PIM.Web.Pages
                 return RedirectToPage();
             }
 
+            // =========================================================
             // Process only movies approved for commit.
+            //
+            // These are the files that PIM is allowed to move/rename
+            // during either a dry run or a live commit.
+            // =========================================================
             var approvedMovies = movies
                 .Where(m => m.ApprovedForCommit)
                 .ToList();
 
+            // =========================================================
             // Execute the file operations.
+            //
+            // If DryRun is true, the rename service should only simulate
+            // the changes and update statuses. No files should actually move.
+            // =========================================================
             _rename.ExecuteChanges(approvedMovies, DryRun);
-            var moveCount = approvedMovies.Count(m => !m.IsDuplicate || m.KeepRecommended);
-            var duplicateDeleteCount = approvedMovies.Count(m =>
+
+            // =========================================================
+            // Summary counts
+            //
+            // IMPORTANT:
+            // Move/rename count comes from approvedMovies because only
+            // approved movies should be processed.
+            //
+            // Duplicate/review/error counts come from the full movie list
+            // because skipped duplicates and review items may not be approved.
+            // =========================================================
+
+            var moveCount = approvedMovies.Count(m =>
+                !m.NeedsReview &&
+                !m.HasError &&
+                (!m.IsDuplicate || m.KeepRecommended));
+
+            var duplicateSkipCount = movies.Count(m =>
                 m.IsDuplicate &&
                 !m.KeepRecommended &&
                 !m.IsAlternateVersion);
 
-            var reviewCount = approvedMovies.Count(m => m.NeedsReview);
-            var errorCount = approvedMovies.Count(m => m.HasError);
+            var reviewCount = movies.Count(m => m.NeedsReview);
+
+            var errorCount = movies.Count(m => m.HasError);
 
             // Save updated statuses back to cache.
             _cache.Set("MovieScan", movies, TimeSpan.FromMinutes(30));
 
             if (DryRun)
             {
-                DryRunPreview = _dryRunPreviewService.BuildPreview(approvedMovies);
+                // Build the preview from the full movie list so the preview can show:
+                // - approved move/rename items
+                // - skipped duplicates
+                // - needs review items
+                // - errors
+                DryRunPreview = _dryRunPreviewService.BuildPreview(movies);
 
                 _cache.Set("DryRunPreview", DryRunPreview, TimeSpan.FromMinutes(30));
 
                 TempData["Message"] =
                     $"Dry Run Complete: " +
                     $"{moveCount} files would be moved, " +
-                    $"{duplicateDeleteCount} duplicates would be skipped/deleted, " +
+                    $"{duplicateSkipCount} duplicates would be skipped, " +
                     $"{reviewCount} need review, " +
                     $"{errorCount} errors found.";
             }
@@ -380,6 +413,7 @@ namespace PIM.Web.Pages
                 TempData["Message"] =
                     $"Changes Applied Successfully: " +
                     $"{moveCount} files processed, " +
+                    $"{duplicateSkipCount} duplicates skipped, " +
                     $"{reviewCount} need review, " +
                     $"{errorCount} errors found.";
             }

@@ -210,6 +210,151 @@
 <br />
 
 <!-- =========================================================
+     🧪 DRY RUN PREVIEW
+========================================================= -->
+@if (Model.DryRunPreview != null)
+{
+    <div id="dryRunPreviewSection" class="card mb-4 border-primary shadow-sm">
+
+        <div class="card-header bg-primary text-white">
+            <strong>🧪 Dry Run Preview</strong>
+        </div>
+
+        <div class="card-body">
+
+            <p class="text-muted mb-4">
+                No files have been changed yet. This preview shows what PIM would do
+                if you run the commit live.
+                <br />
+                <strong>Total Previewed Files:</strong> @Model.DryRunPreview.TotalFiles
+            </p>
+
+            <!-- Summary Filter Cards -->
+            <div class="row mb-4" id="dryRunFilterCards">
+
+                <div class="col-md-3 mb-3">
+                    <button type="button"
+                            class="card h-100 text-center w-100 dry-run-filter-card"
+                            data-preview-filter="move"
+                            style="cursor:pointer;">
+                        <div class="card-body">
+                            <h5 class="card-title">Ready to Move</h5>
+                            <div class="display-6">
+                                @Model.DryRunPreview.ReadyToMoveCount
+                            </div>
+                        </div>
+                    </button>
+                </div>
+
+                <div class="col-md-3 mb-3">
+                    <button type="button"
+                            class="card h-100 text-center w-100 dry-run-filter-card"
+                            data-preview-filter="duplicate"
+                            style="cursor:pointer;">
+                        <div class="card-body">
+                            <h5 class="card-title">Duplicates to Skip</h5>
+                            <div class="display-6">
+                                @Model.DryRunPreview.DuplicateSkipCount
+                            </div>
+                        </div>
+                    </button>
+                </div>
+
+                <div class="col-md-3 mb-3">
+                    <button type="button"
+                            class="card h-100 text-center w-100 dry-run-filter-card"
+                            data-preview-filter="review"
+                            style="cursor:pointer;">
+                        <div class="card-body">
+                            <h5 class="card-title">Needs Review</h5>
+                            <div class="display-6">
+                                @Model.DryRunPreview.NeedsReviewCount
+                            </div>
+                        </div>
+                    </button>
+                </div>
+
+                <div class="col-md-3 mb-3">
+                    <button type="button"
+                            class="card h-100 text-center w-100 dry-run-filter-card"
+                            data-preview-filter="error"
+                            style="cursor:pointer;">
+                        <div class="card-body">
+                            <h5 class="card-title">Errors</h5>
+                            <div class="display-6">
+                                @Model.DryRunPreview.ErrorCount
+                            </div>
+                        </div>
+                    </button>
+                </div>
+
+            </div>
+
+            <div class="mb-3">
+                <small id="dryRunFilterStatus" class="text-muted">
+                    Showing all dry run preview items.
+                </small>
+            </div>
+            <!-- Detailed Preview Table -->
+            <div style="max-height:500px; overflow:auto;">
+
+                <table class="table table-sm table-striped table-bordered align-middle">
+
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width:150px;">Action</th>
+                            <th>Original File</th>
+                            <th>Target Path</th>
+                            <th style="width:160px;">Status</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        @foreach (var item in Model.DryRunPreview.Items)
+                        {
+                            var previewCategory =
+                            item.Action.Contains("Move", StringComparison.OrdinalIgnoreCase) ||
+                            item.Action.Contains("Rename", StringComparison.OrdinalIgnoreCase)
+                            ? "move"
+                            : item.Action.Contains("Duplicate", StringComparison.OrdinalIgnoreCase) ||
+                            item.Action.Contains("Skip", StringComparison.OrdinalIgnoreCase)
+                            ? "duplicate"
+                            : item.Action.Contains("Review", StringComparison.OrdinalIgnoreCase)
+                            ? "review"
+                            : item.Action.Contains("Error", StringComparison.OrdinalIgnoreCase)
+                            ? "error"
+                            : "other";
+
+                            <tr class="dry-run-preview-row"
+                                data-preview-category="@previewCategory">
+                                <td>
+                                    <strong>@item.Action</strong>
+                                </td>
+
+                                <td style="font-size:0.85em;">
+                                    @item.OriginalFilePath
+                                </td>
+
+                                <td style="font-size:0.85em; color:green;">
+                                    @item.TargetPath
+                                </td>
+
+                                <td>
+                                    @item.Status
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </div>
+    </div>
+}
+
+<!-- =========================================================
      📑 RESULTS TABS
 ========================================================= -->
 <div class="mt-4">
@@ -441,34 +586,43 @@
         const workflowStatus =
             document.getElementById("workflowStatus");
 
-        // =====================================================
-        // 🔄 FULL SCAN
-        // =====================================================
-        const scanBtn = document.getElementById("scanBtn");
+    // =====================================================
+    // 🔄 FULL SCAN
+    // =====================================================
+    const scanBtn = document.getElementById("scanBtn");
 
-        if (scanBtn) {
-            scanBtn.addEventListener("click", async () => {
+    if (scanBtn) {
+        scanBtn.addEventListener("click", async () => {
 
-                workflowStatus.innerText = "Starting scan...";
+            // -------------------------------------------------
+            // 🧪 Clear stale Dry Run Preview immediately
+            // -------------------------------------------------
+            const dryRunPreviewSection =
+                document.getElementById("dryRunPreviewSection");
 
-                // Start polling immediately so the UI updates
-                // while the server is processing.
-                pollProgress("Scan complete!");
+            if (dryRunPreviewSection) {
+                dryRunPreviewSection.remove();
+            }
 
-                // Launch scan in the background.
-                const response = await fetch("?handler=Rescan", {
-                    method: "POST",
-                    headers: {
-                        "RequestVerificationToken": tokenInput.value
-                    }
-                });
+            workflowStatus.innerText = "Starting scan...";
 
-                if (!response.ok) {
-                    workflowStatus.innerText = "Scan failed.";
+            // Start polling immediately so the UI updates
+            // while the server is processing.
+            pollProgress("Scan complete!");
+
+            // Launch scan in the background.
+            const response = await fetch("?handler=Rescan", {
+                method: "POST",
+                headers: {
+                    "RequestVerificationToken": tokenInput.value
                 }
             });
-        }
 
+            if (!response.ok) {
+                workflowStatus.innerText = "Scan failed.";
+            }
+        });
+    }
         // =====================================================
         // 🌐 RETRIEVE METADATA
         // =====================================================
@@ -497,6 +651,75 @@
                 }
             });
         }
+        // =====================================================
+        // 🧪 DRY RUN PREVIEW CARD FILTERING
+        // =====================================================
+        let activeDryRunFilter = null;
+
+        const filterCards =
+            document.querySelectorAll(".dry-run-filter-card");
+
+        const previewRows =
+            document.querySelectorAll(".dry-run-preview-row");
+
+        const filterStatus =
+            document.getElementById("dryRunFilterStatus");
+
+        filterCards.forEach(function (card) {
+            card.addEventListener("click", function () {
+
+                const selectedFilter =
+                    card.dataset.previewFilter;
+
+                // Clicking the same card again clears the filter.
+                if (activeDryRunFilter === selectedFilter) {
+                    activeDryRunFilter = null;
+                } else {
+                    activeDryRunFilter = selectedFilter;
+                }
+
+                // Reset all card visual states.
+                filterCards.forEach(function (c) {
+                    c.classList.remove("border-primary", "shadow");
+                });
+
+                // Highlight the selected card.
+                if (activeDryRunFilter !== null) {
+                    card.classList.add("border-primary", "shadow");
+                }
+
+                // Show/hide preview rows.
+                let visibleCount = 0;
+
+                previewRows.forEach(function (row) {
+
+                    const rowCategory =
+                        row.dataset.previewCategory;
+
+                    if (
+                        activeDryRunFilter === null ||
+                        rowCategory === activeDryRunFilter
+                    ) {
+                        row.style.display = "";
+                        visibleCount++;
+                    } else {
+                        row.style.display = "none";
+                    }
+                });
+
+                // Update helper text.
+                if (filterStatus) {
+                    if (activeDryRunFilter === null) {
+                        filterStatus.textContent =
+                            "Showing all dry run preview items.";
+                    } else {
+                        filterStatus.textContent =
+                            `Showing ${visibleCount} dry run preview item(s). ` +
+                            "Click the selected card again to clear the filter.";
+                    }
+                }
+            });
+        });
 
         // =====================================================
         // 📊 PROGRESS POLLING
