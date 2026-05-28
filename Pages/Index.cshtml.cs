@@ -35,6 +35,8 @@ namespace PIM.Web.Pages
         private readonly IMemoryCache _cache;
         private readonly ScanProgress _progress;
         private readonly PreviewTreeService _treeService;
+        private readonly IDryRunPreviewService _dryRunPreviewService;
+        public DryRunPreviewResult? DryRunPreview { get; set; }
 
         // =========================================================
         // 🎛️ UI State
@@ -95,7 +97,8 @@ namespace PIM.Web.Pages
             IConfiguration config,
             IMemoryCache cache,
             ScanProgress progress,
-            PreviewTreeService treeService)
+            PreviewTreeService treeService,
+            IDryRunPreviewService dryRunPreviewService)
         {
             _scanner = scanner;
             _parser = parser;
@@ -106,6 +109,7 @@ namespace PIM.Web.Pages
             _cache = cache;
             _progress = progress;
             _treeService = treeService;
+            _dryRunPreviewService = dryRunPreviewService;
         }
 
         // =========================================================
@@ -136,6 +140,11 @@ namespace PIM.Web.Pages
                     : sorted;
 
                 BuildPreviewTree();
+
+                if (_cache.TryGetValue("DryRunPreview", out DryRunPreviewResult? dryRunPreview))
+                {
+                    DryRunPreview = dryRunPreview;
+                }
             }
             else
             {
@@ -342,19 +351,23 @@ namespace PIM.Web.Pages
             // Execute the file operations.
             _rename.ExecuteChanges(approvedMovies, DryRun);
             var moveCount = approvedMovies.Count(m => !m.IsDuplicate || m.KeepRecommended);
-            var duplicateDeleteCount = movies.Count(m =>
+            var duplicateDeleteCount = approvedMovies.Count(m =>
                 m.IsDuplicate &&
                 !m.KeepRecommended &&
                 !m.IsAlternateVersion);
 
-            var reviewCount = movies.Count(m => m.NeedsReview);
-            var errorCount = movies.Count(m => m.HasError);
+            var reviewCount = approvedMovies.Count(m => m.NeedsReview);
+            var errorCount = approvedMovies.Count(m => m.HasError);
 
             // Save updated statuses back to cache.
             _cache.Set("MovieScan", movies, TimeSpan.FromMinutes(30));
 
             if (DryRun)
             {
+                DryRunPreview = _dryRunPreviewService.BuildPreview(approvedMovies);
+
+                _cache.Set("DryRunPreview", DryRunPreview, TimeSpan.FromMinutes(30));
+
                 TempData["Message"] =
                     $"Dry Run Complete: " +
                     $"{moveCount} files would be moved, " +
@@ -399,10 +412,6 @@ namespace PIM.Web.Pages
                 PreviewTree = null;
             }
         }
-        // =========================================================
-        // 💾 Save Library Settings
-        // =========================================================
-
         // =========================================================
         // 💾 Save Library Settings
         // =========================================================

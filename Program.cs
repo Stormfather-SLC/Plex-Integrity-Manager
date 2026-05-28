@@ -18,6 +18,7 @@ builder.Services.AddScoped<IRenameService, RenameService>();
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<ScanProgress>();
 builder.Services.AddScoped<PreviewTreeService>();
+builder.Services.AddScoped<IDryRunPreviewService, DryRunPreviewService>();
 
 var app = builder.Build();
 
