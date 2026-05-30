@@ -411,6 +411,7 @@
                             <th>Year</th>
                             <th>Size (MB)</th>
                             <th>Status</th>
+                            <th>Version</th>
                             <th>Action</th>
                             <th>Review Reason</th>
                             <th>Original (Before)</th>
@@ -469,6 +470,10 @@
                                     {
                                         <span>✔ Unique</span>
                                     }
+                                </td>
+
+                                <td>
+                                    @(string.IsNullOrWhiteSpace(movie.VersionTag) ? "-" : movie.VersionTag)
                                 </td>
 
                                 <td>
