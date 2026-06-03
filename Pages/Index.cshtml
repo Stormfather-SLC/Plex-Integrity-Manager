@@ -9,6 +9,11 @@
 ========================================================= -->
 
 <h1>Plex Intake Manager (PIM)</h1>
+<div class="alert alert-warning mt-3">
+    <strong>Alpha Build:</strong>
+    Use PIM only with a test folder or backup copy of your movie library.
+    Do not run this against your primary Plex library yet.
+</div>
 
 @if (TempData["Message"] != null)
 {
@@ -173,6 +178,19 @@
                 <input asp-for="DryRun" />
                 <span>Dry Run</span>
             </label>
+
+            @if (Model.DryRun)
+            {
+                <span class="text-success" style="font-size:0.85em;">
+                    Dry Run enabled — no files will be moved or renamed.
+                </span>
+            }
+            else
+            {
+                <span class="text-danger" style="font-size:0.85em;">
+                    Live mode — approved files may be moved and renamed.
+                </span>
+            }
 
             <!-- Apply Changes -->
             <button type="submit"
