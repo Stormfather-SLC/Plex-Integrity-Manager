@@ -534,20 +534,22 @@ namespace PIM.Web.Pages
         /// so it matches the current dry-run preview card behavior.
         /// </summary>
         private static CommitSummary BuildCommitSummary(
-            List<Movie> allMovies,
-            List<Movie> approvedMovies)
+    List<Movie> allMovies,
+    List<Movie> approvedMovies)
         {
-            var moveCount = approvedMovies.Count(m =>
+            var duplicateSkipCount = allMovies.Count(m =>
                 !m.NeedsReview &&
                 !m.HasError &&
-                (!m.IsDuplicate || m.KeepRecommended || m.IsAlternateVersion));
-
-            var duplicateSkipCount = allMovies.Count(m =>
                 m.IsDuplicate &&
                 !m.KeepRecommended);
 
             var reviewCount = allMovies.Count(m => m.NeedsReview);
             var errorCount = allMovies.Count(m => m.HasError);
+
+            var moveCount = allMovies.Count(m =>
+                !m.NeedsReview &&
+                !m.HasError &&
+                !(m.IsDuplicate && !m.KeepRecommended));
 
             return new CommitSummary(
                 moveCount,
