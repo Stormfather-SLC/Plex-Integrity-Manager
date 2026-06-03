@@ -238,7 +238,7 @@
                             data-preview-filter="move"
                             style="cursor:pointer;">
                         <div class="card-body">
-                            <h5 class="card-title">Ready to Move</h5>
+                            <h5 class="card-title">Move / Rename</h5>
                             <div class="display-6">
                                 @Model.DryRunPreview.ReadyToMoveCount
                             </div>
@@ -374,17 +374,20 @@
             </button>
         </li>
 
-        <!-- Preview Tree -->
-        <li class="nav-item" role="presentation">
-            <button class="nav-link"
-                    id="preview-tab"
-                    data-bs-toggle="tab"
-                    data-bs-target="#preview-pane"
-                    type="button"
-                    role="tab">
-                🌳 Preview Tree
-            </button>
-        </li>
+        @if (Model.Movies.Any(m => !string.IsNullOrWhiteSpace(m.ImdbId)))
+        {
+            <!-- Preview Tree -->
+            <li class="nav-item" role="presentation">
+                <button class="nav-link"
+                        id="preview-tab"
+                        data-bs-toggle="tab"
+                        data-bs-target="#preview-pane"
+                        type="button"
+                        role="tab">
+                    🌳 Preview Tree
+                </button>
+            </li>
+        }
     </ul>
 
     <!-- Tab Content -->
@@ -531,41 +534,44 @@
             </div>
         </div>
 
-        <!-- =================================================
-             🌳 PREVIEW TREE TAB
-        ================================================== -->
-        <div class="tab-pane fade"
-             id="preview-pane"
-             role="tabpanel">
+        @if (Model.Movies.Any(m => !string.IsNullOrWhiteSpace(m.ImdbId)))
+        {
+            <!-- =================================================
+                 🌳 PREVIEW TREE TAB
+            ================================================== -->
+            <div class="tab-pane fade"
+                 id="preview-pane"
+                 role="tabpanel">
 
-            <p style="color:#084298;">
-                🔍 @Model.Movies.Count(m => m.NeedsReview)
-                movies require review and are not shown.
-            </p>
-
-            <p style="color:#842029;">
-                ❌ @Model.Movies.Count(m => m.HasError)
-                movies have errors and are excluded.
-            </p>
-
-            @if (Model.PreviewTree != null)
-            {
-                <div style="max-height:700px; overflow:auto;">
-                    <ul>
-                        @{
-                            RenderNode(Model.PreviewTree);
-                        }
-                    </ul>
-                </div>
-            }
-            else
-            {
-                <p style="color:gray;">
-                    No preview available.
-                    Run a scan to generate the file structure.
+                <p style="color:#084298;">
+                    🔍 @Model.Movies.Count(m => m.NeedsReview)
+                    movies require review and are not shown.
                 </p>
-            }
-        </div>
+
+                <p style="color:#842029;">
+                    ❌ @Model.Movies.Count(m => m.HasError)
+                    movies have errors and are excluded.
+                </p>
+
+                @if (Model.PreviewTree != null)
+                {
+                    <div style="max-height:700px; overflow:auto;">
+                        <ul>
+                            @{
+                                RenderNode(Model.PreviewTree);
+                            }
+                        </ul>
+                    </div>
+                }
+                else
+                {
+                    <p style="color:gray;">
+                        No preview available.
+                        Run a scan to generate the file structure.
+                    </p>
+                }
+            </div>
+        }
     </div>
 </div>
 <!-- =========================================================
