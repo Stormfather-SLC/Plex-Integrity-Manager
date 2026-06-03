@@ -152,14 +152,14 @@
 
         <!-- Full Scan -->
         <button type="button" id="scanBtn">
-            🔄 Full Scan
+            🎬 Scan Movies
         </button>
 
         <!-- Retrieve Metadata -->
         <button type="button"
                 id="enrichBtn"
                 disabled="@(!Model.Movies.Any())">
-            🌐 Retrieve Metadata
+            🔎 Identify Movies
         </button>
 
         <!-- Apply Changes Form -->
@@ -615,7 +615,7 @@
                 dryRunPreviewSection.remove();
             }
 
-            workflowStatus.innerText = "Starting scan...";
+            workflowStatus.innerText = "Scanning movie files...";
 
             // Start polling immediately so the UI updates
             // while the server is processing.
@@ -642,11 +642,11 @@
         if (enrichBtn) {
             enrichBtn.addEventListener("click", async () => {
 
-                workflowStatus.innerText = "Retrieving metadata...";
+                workflowStatus.innerText = "Identifying movies and preparing matches...";
 
                 // Start polling immediately so the UI updates
                 // while metadata is being retrieved.
-                pollProgress("Metadata retrieval complete!");
+                pollProgress("Movie identification complete!");
 
                 // Launch metadata retrieval in the background.
                 const response = await fetch("?handler=Enrich", {
