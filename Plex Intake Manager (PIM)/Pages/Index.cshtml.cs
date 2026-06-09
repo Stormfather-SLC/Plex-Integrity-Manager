@@ -286,7 +286,10 @@ namespace PIM.Web.Pages
             }
 
             var approvedMovies = movies
-                .Where(m => m.ApprovedForCommit)
+                .Where(m =>
+                    m.ApprovedForCommit &&
+                    !m.NeedsReview &&
+                    !m.HasError)
                 .ToList();
 
             _rename.ExecuteChanges(approvedMovies, DryRun);

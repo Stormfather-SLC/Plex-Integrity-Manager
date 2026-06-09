@@ -1,14 +1,14 @@
 ﻿@page
 @model PIM.Web.Pages.IndexModel
 @{
-    ViewData["Title"] = "Plex Intake Manager";
+    ViewData["Title"] = "Plex Integrity Manager";
 }
 
 <!-- =========================================================
      🏠 PAGE HEADER
 ========================================================= -->
 
-<h1>Plex Intake Manager (PIM)</h1>
+<h1>Plex Integrity Manager (PIM)</h1>
 <div class="alert alert-warning mt-3">
     <strong>Alpha Build:</strong>
     Use PIM only with a test folder or backup copy of your movie library.
@@ -182,7 +182,7 @@
             @if (Model.DryRun)
             {
                 <span class="text-success" style="font-size:0.85em;">
-                    Dry Run enabled — no files will be moved or renamed.
+                    <!--Dry Run enabled — no files will be moved or renamed.-->
                 </span>
             }
             else
@@ -563,12 +563,14 @@
 
                 <p style="color:#084298;">
                     🔍 @Model.Movies.Count(m => m.NeedsReview)
-                    movies require review and are not shown.
+                    movies require review and are shown in the Preview Tree under
+                    <strong>Needs Review</strong>.
                 </p>
 
                 <p style="color:#842029;">
                     ❌ @Model.Movies.Count(m => m.HasError)
-                    movies have errors and are excluded.
+                    movies have errors and are shown in the Preview Tree under
+                    <strong>Errors</strong>.
                 </p>
 
                 @if (Model.PreviewTree != null)
@@ -909,6 +911,14 @@
                 {
                     <span class="@tagClass">
                         @label
+                    </span>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(node.Status) &&
+                     (movie?.NeedsReview == true || movie?.HasError == true))
+                {
+                    <span style="font-size:0.8em; color:#666; margin-left:8px;">
+                        — @node.Status
                     </span>
                 }
 

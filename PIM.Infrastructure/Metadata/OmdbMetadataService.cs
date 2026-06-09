@@ -1,0 +1,228 @@
+﻿using System.Net.Http;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
+using PIM.Core.Interfaces;
+using PIM.Core.Models;
+
+namespace PIM.Infrastructure.Metadata
+{
+    public class OmdbMetadataService : IMetadataService
+    {
+        private readonly HttpClient _httpClient;
+        //private readonly string _apiKey = "7e1e1bbf";
+        // TODO: Move API key to User Secrets before public release.
+        private readonly string _apiKey = "3eec1c90";
+
+        public OmdbMetadataService(HttpClient httpClient)
+        {
+            _httpClient = httpClient;
+        }
+
+        public async Task EnrichAsync(Movie movie)
+        {
+            var parsedTitle = movie.Title;
+            var parsedYear = movie.Year;
+            var hasImdbId = !string.IsNullOrWhiteSpace(movie.ImdbId);
+
+            if (!hasImdbId && string.IsNullOrWhiteSpace(parsedTitle))
+                return;
+
+            var url = hasImdbId
+                ? $"https://www.omdbapi.com/?i={Uri.EscapeDataString(movie.ImdbId!)}"
+                : $"https://www.omdbapi.com/?t={Uri.EscapeDataString(parsedTitle!)}";
+
+            if (!hasImdbId && parsedYear.HasValue)
+                url += $"&y={parsedYear}";
+
+            url += $"&type=movie&apikey={_apiKey}";
+
+            Console.WriteLine(hasImdbId
+                ? $"OMDb Lookup by IMDb ID: IMDb='{movie.ImdbId}', ParsedTitle='{parsedTitle}', ParsedYear='{parsedYear}'"
+                : $"OMDb Lookup by Title: Title='{parsedTitle}', Year='{parsedYear}'");
+
+            Console.WriteLine(url);
+
+            var response = await _httpClient.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+                return;
+
+            var json = await response.Content.ReadAsStringAsync();
+            var data = JsonSerializer.Deserialize<OmdbResponse>(json);
+
+            if (data == null || data.Response == "False")
+            {
+                if (hasImdbId)
+                {
+                    movie.NeedsReview = true;
+                    movie.ReviewReason = "IMDb ID found, but OMDb lookup failed";
+                    movie.MatchConfidence = 0;
+                    movie.Status = "IMDb ID Lookup Failed";
+                }
+
+                return;
+            }
+
+            var metadataYear = ParseYear(data.Year);
+
+            movie.SuggestedTitle = data.Title;
+            movie.MatchConfidence = CalculateConfidence(
+                parsedTitle,
+                parsedYear,
+                data.Title,
+                metadataYear,
+                hasImdbId);
+
+            movie.MetadataMatchedByImdbId = hasImdbId;
+            movie.Title = data.Title;
+            movie.Year = metadataYear ?? movie.Year;
+            movie.ImdbId = data.ImdbID;
+            movie.MetadataFetched = true;
+
+            if (movie.MatchConfidence < 85)
+            {
+                movie.NeedsReview = true;
+                movie.ReviewReason = hasImdbId
+                    ? $"IMDb ID matched, but parsed title/year differs from OMDb metadata ({movie.MatchConfidence:0}% confidence)"
+                    : $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)";
+                movie.Status = "Needs Review";
+            }
+            else
+            {
+                movie.NeedsReview = false;
+                movie.ReviewReason = null;
+                movie.Status = hasImdbId ? "IMDb ID Match" : "Metadata Enriched";
+            }
+        }
+
+        private static int? ParseYear(string? rawYear)
+        {
+            if (string.IsNullOrWhiteSpace(rawYear))
+                return null;
+
+            var match = Regex.Match(rawYear, @"\b(19|20)\d{2}\b");
+
+            return match.Success && int.TryParse(match.Value, out var year)
+                ? year
+                : null;
+        }
+
+        private static double CalculateConfidence(
+            string? parsedTitle,
+            int? parsedYear,
+            string metadataTitle,
+            int? metadataYear,
+            bool matchedByImdbId)
+        {
+            var titleSimilarity = CalculateTitleSimilarity(parsedTitle, metadataTitle);
+            var yearMatches = parsedYear.HasValue && metadataYear.HasValue && parsedYear.Value == metadataYear.Value;
+            var yearConflicts = parsedYear.HasValue && metadataYear.HasValue && parsedYear.Value != metadataYear.Value;
+
+            if (matchedByImdbId)
+            {
+                if (titleSimilarity >= 0.95 && yearMatches)
+                    return 100;
+
+                if (titleSimilarity >= 0.85 && yearMatches)
+                    return 98;
+
+                if (titleSimilarity >= 0.65 && yearMatches)
+                    return 94;
+
+                if (titleSimilarity >= 0.85 && !yearConflicts)
+                    return 95;
+
+                if (yearMatches)
+                    return 90;
+
+                if (yearConflicts)
+                    return titleSimilarity >= 0.85 ? 82 : 75;
+
+                return 88;
+            }
+
+            if (titleSimilarity >= 0.95 && yearMatches)
+                return 95;
+
+            if (titleSimilarity >= 0.85 && yearMatches)
+                return 90;
+
+            if (titleSimilarity >= 0.85 && !yearConflicts)
+                return 86;
+
+            if (yearConflicts)
+                return titleSimilarity >= 0.90 ? 78 : 65;
+
+            return Math.Round(titleSimilarity * 80, 0);
+        }
+
+        private static double CalculateTitleSimilarity(string? left, string? right)
+        {
+            var normalizedLeft = NormalizeTitle(left);
+            var normalizedRight = NormalizeTitle(right);
+
+            if (string.IsNullOrWhiteSpace(normalizedLeft) || string.IsNullOrWhiteSpace(normalizedRight))
+                return 0;
+
+            if (normalizedLeft == normalizedRight)
+                return 1;
+
+            var distance = LevenshteinDistance(normalizedLeft, normalizedRight);
+            var maxLength = Math.Max(normalizedLeft.Length, normalizedRight.Length);
+
+            return maxLength == 0
+                ? 0
+                : 1.0 - ((double)distance / maxLength);
+        }
+
+        private static string NormalizeTitle(string? title)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+                return string.Empty;
+
+            var normalized = title.ToLowerInvariant();
+
+            normalized = Regex.Replace(normalized, @"\b(the|a|an)\b", " ");
+            normalized = Regex.Replace(normalized, @"[^a-z0-9]+", " ");
+            normalized = Regex.Replace(normalized, @"\s+", " ").Trim();
+
+            return normalized;
+        }
+
+        private static int LevenshteinDistance(string left, string right)
+        {
+            var matrix = new int[left.Length + 1, right.Length + 1];
+
+            for (var i = 0; i <= left.Length; i++)
+                matrix[i, 0] = i;
+
+            for (var j = 0; j <= right.Length; j++)
+                matrix[0, j] = j;
+
+            for (var i = 1; i <= left.Length; i++)
+            {
+                for (var j = 1; j <= right.Length; j++)
+                {
+                    var cost = left[i - 1] == right[j - 1] ? 0 : 1;
+
+                    matrix[i, j] = Math.Min(
+                        Math.Min(matrix[i - 1, j] + 1, matrix[i, j - 1] + 1),
+                        matrix[i - 1, j - 1] + cost);
+                }
+            }
+
+            return matrix[left.Length, right.Length];
+        }
+
+        private class OmdbResponse
+        {
+            public string Title { get; set; } = "";
+            public string Year { get; set; } = "";
+
+            [JsonPropertyName("imdbID")]
+            public string ImdbID { get; set; } = "";
+
+            public string Response { get; set; } = "";
+        }
+    }
+}

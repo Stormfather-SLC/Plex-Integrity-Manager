@@ -55,21 +55,33 @@ public class DryRunPreviewService : IDryRunPreviewService
         if (movie.NeedsReview)
         {
             item.Action = "Needs Review";
+            item.Status = movie.ReviewReason ?? "Review required before commit";
+            item.TargetPath = string.Empty;
             item.CssClass = "dryrun-review";
+        }
+        else if (movie.HasError)
+        {
+            item.Action = "Error";
+            item.Status = movie.ErrorMessage ?? movie.Status ?? "Error requires attention before commit";
+            item.TargetPath = string.Empty;
+            item.CssClass = "dryrun-error";
         }
         else if (string.IsNullOrWhiteSpace(movie.TargetPath))
         {
             item.Action = "Error";
+            item.Status = "Missing target path";
             item.CssClass = "dryrun-error";
         }
-        else if (movie.IsDuplicate && !movie.KeepRecommended)
+        else if (movie.IsDuplicate && !movie.KeepRecommended && !movie.IsAlternateVersion)
         {
             item.Action = "Skip Duplicate";
+            item.Status = "Duplicate would be skipped";
             item.CssClass = "dryrun-duplicate";
         }
         else
         {
             item.Action = "Move/Rename";
+            item.Status = movie.Status ?? "Rename preview generated";
             item.CssClass = "dryrun-ready";
         }
 
