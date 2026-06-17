@@ -18,11 +18,11 @@ public class DryRunPreviewService : IDryRunPreviewService
 
             switch (item.Action)
             {
-                case "Move/Rename":
+                case "Move / Rename":
                     result.ReadyToMoveCount++;
                     break;
 
-                case "Skip Duplicate":
+                case "Duplicate - Skip":
                     result.DuplicateSkipCount++;
                     break;
 
@@ -44,19 +44,37 @@ public class DryRunPreviewService : IDryRunPreviewService
         var item = new DryRunPreviewItem
         {
             FileName = movie.FileName ?? string.Empty,
-            OriginalFilePath = movie.OriginalFilePath,
+            OriginalFilePath = movie.OriginalFilePath ?? string.Empty,
             TargetPath = movie.TargetPath ?? string.Empty,
             Status = movie.Status ?? string.Empty,
             IsDuplicate = movie.IsDuplicate,
             KeepRecommended = movie.KeepRecommended,
-            NeedsReview = movie.NeedsReview
+            NeedsReview = movie.NeedsReview,
+            HasError = movie.HasError,
+            IsAlternateVersion = movie.IsAlternateVersion,
+
+            HasDestinationConflict = movie.HasDestinationConflict,
+            DestinationConflictReason = movie.DestinationConflictReason ?? string.Empty,
+            ExistingDestinationPath = movie.ExistingDestinationPath ?? string.Empty,
+
+            HasPlexLibraryConflict = movie.HasPlexLibraryConflict,
+            PlexLibraryConflictReason = movie.PlexLibraryConflictReason ?? string.Empty,
+            ExistingPlexLibraryPath = movie.ExistingPlexLibraryPath ?? string.Empty
         };
 
         if (movie.NeedsReview)
         {
             item.Action = "Needs Review";
             item.Status = movie.ReviewReason ?? "Review required before commit";
-            item.TargetPath = string.Empty;
+
+            // For normal review rows, TargetPath may not be useful or safe.
+            // For conflict rows, keep the proposed target visible so the user can
+            // compare it against the existing destination/Plex path.
+            if (!item.HasAnyConflict)
+            {
+                item.TargetPath = string.Empty;
+            }
+
             item.CssClass = "dryrun-review";
         }
         else if (movie.HasError)
@@ -66,23 +84,18 @@ public class DryRunPreviewService : IDryRunPreviewService
             item.TargetPath = string.Empty;
             item.CssClass = "dryrun-error";
         }
-        else if (string.IsNullOrWhiteSpace(movie.TargetPath))
-        {
-            item.Action = "Error";
-            item.Status = "Missing target path";
-            item.CssClass = "dryrun-error";
-        }
         else if (movie.IsDuplicate && !movie.KeepRecommended && !movie.IsAlternateVersion)
         {
-            item.Action = "Skip Duplicate";
-            item.Status = "Duplicate would be skipped";
+            item.Action = "Duplicate - Skip";
+            item.Status = "Duplicate skipped";
+            item.TargetPath = string.Empty;
             item.CssClass = "dryrun-duplicate";
         }
         else
         {
-            item.Action = "Move/Rename";
-            item.Status = movie.Status ?? "Rename preview generated";
-            item.CssClass = "dryrun-ready";
+            item.Action = "Move / Rename";
+            item.Status = movie.Status ?? "Ready to move";
+            item.CssClass = "dryrun-move";
         }
 
         return item;

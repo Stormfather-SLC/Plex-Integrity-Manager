@@ -12,11 +12,34 @@ public class DryRunPreviewItem
 
     public string Status { get; set; } = string.Empty;
 
+    public string CssClass { get; set; } = string.Empty;
+
     public bool IsDuplicate { get; set; }
 
     public bool KeepRecommended { get; set; }
 
     public bool NeedsReview { get; set; }
 
-    public string CssClass { get; set; } = string.Empty;
+    public bool HasError { get; set; }
+
+    public bool IsAlternateVersion { get; set; }
+
+    // =========================================================
+    // 🛑 Conflict Display
+    // =========================================================
+
+    public bool HasDestinationConflict { get; set; }
+
+    public string DestinationConflictReason { get; set; } = string.Empty;
+
+    public string ExistingDestinationPath { get; set; } = string.Empty;
+
+    public bool HasPlexLibraryConflict { get; set; }
+
+    public string PlexLibraryConflictReason { get; set; } = string.Empty;
+
+    public string ExistingPlexLibraryPath { get; set; } = string.Empty;
+
+    public bool HasAnyConflict =>
+        HasDestinationConflict || HasPlexLibraryConflict;
 }

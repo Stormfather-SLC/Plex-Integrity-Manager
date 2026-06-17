@@ -323,7 +323,7 @@
                             <th style="width:150px;">Action</th>
                             <th>Original File</th>
                             <th>Target Path</th>
-                            <th style="width:160px;">Status</th>
+                            <th style="width:300px;">Status</th>
                         </tr>
                     </thead>
 
@@ -354,11 +354,74 @@
                                 </td>
 
                                 <td style="font-size:0.85em; color:green;">
-                                    @item.TargetPath
+                                    @if (!string.IsNullOrWhiteSpace(item.TargetPath))
+                                    {
+                                        @item.TargetPath
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">—</span>
+                                    }
                                 </td>
 
                                 <td>
-                                    @item.Status
+                                    <div>@item.Status</div>
+
+                                    @if (item.HasDestinationConflict)
+                                    {
+                                        <div class="alert alert-warning mt-2 mb-0 p-2" style="font-size:0.85em;">
+                                            <div class="fw-bold">Destination Conflict</div>
+
+                                            <div>
+                                                <strong>Reason:</strong>
+                                                @item.DestinationConflictReason
+                                            </div>
+
+                                            @if (!string.IsNullOrWhiteSpace(item.ExistingDestinationPath))
+                                            {
+                                                <div class="mt-1">
+                                                    <strong>Existing Path:</strong>
+                                                    <div class="text-break">@item.ExistingDestinationPath</div>
+                                                </div>
+                                            }
+
+                                            @if (!string.IsNullOrWhiteSpace(item.TargetPath))
+                                            {
+                                                <div class="mt-1">
+                                                    <strong>Proposed Path:</strong>
+                                                    <div class="text-break">@item.TargetPath</div>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+
+                                    @if (item.HasPlexLibraryConflict)
+                                    {
+                                        <div class="alert alert-info mt-2 mb-0 p-2" style="font-size:0.85em;">
+                                            <div class="fw-bold">Plex Library Conflict</div>
+
+                                            <div>
+                                                <strong>Reason:</strong>
+                                                @item.PlexLibraryConflictReason
+                                            </div>
+
+                                            @if (!string.IsNullOrWhiteSpace(item.ExistingPlexLibraryPath))
+                                            {
+                                                <div class="mt-1">
+                                                    <strong>Existing Plex Path:</strong>
+                                                    <div class="text-break">@item.ExistingPlexLibraryPath</div>
+                                                </div>
+                                            }
+
+                                            @if (!string.IsNullOrWhiteSpace(item.TargetPath))
+                                            {
+                                                <div class="mt-1">
+                                                    <strong>Proposed Path:</strong>
+                                                    <div class="text-break">@item.TargetPath</div>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
                                 </td>
                             </tr>
                         }
