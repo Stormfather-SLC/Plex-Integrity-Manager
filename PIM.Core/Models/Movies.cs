@@ -49,6 +49,29 @@ namespace PIM.Core.Models
         /// </summary>
         public string? ReviewReason { get; set; }
 
+        // =========================================================
+        // 🛑 Conflict Detection
+        // =========================================================
+
+        /// <summary>
+        /// True when the proposed destination path conflicts with something
+        /// already present in the destination library folder.
+        /// </summary>
+        public bool HasDestinationConflict { get; set; }
+
+        public string? DestinationConflictReason { get; set; }
+
+        public string? ExistingDestinationPath { get; set; }
+
+        /// <summary>
+        /// True when Plex already knows about this movie somewhere else.
+        /// </summary>
+        public bool HasPlexLibraryConflict { get; set; }
+
+        public string? PlexLibraryConflictReason { get; set; }
+
+        public string? ExistingPlexLibraryPath { get; set; }
+
 
         // =========================================================
         // 🔴 Error System (NEW)

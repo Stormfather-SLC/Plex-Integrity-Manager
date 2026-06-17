@@ -1,7 +1,6 @@
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 using PIM.Infrastructure.FileSystem;
-using PIM.Infrastructure.FileSystem;
 using PIM.Infrastructure.Metadata;
 using PIM.Infrastructure.Parsing;
 using PIM.Infrastructure.Services;
@@ -19,6 +18,9 @@ builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<ScanProgress>();
 builder.Services.AddScoped<PreviewTreeService>();
 builder.Services.AddScoped<IDryRunPreviewService, DryRunPreviewService>();
+builder.Services.AddScoped<IDestinationConflictService, DestinationConflictService>();
+builder.Services.AddScoped<IPlexLibraryConflictService, PlexLibraryConflictService>();
+builder.Services.AddScoped<IMovieConflictDetectionService, MovieConflictDetectionService>();
 
 var app = builder.Build();
 

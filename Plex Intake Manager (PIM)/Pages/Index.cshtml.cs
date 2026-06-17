@@ -49,6 +49,7 @@ namespace PIM.Web.Pages
         private readonly ScanProgress _progress;
         private readonly PreviewTreeService _treeService;
         private readonly IDryRunPreviewService _dryRunPreviewService;
+        private readonly IMovieConflictDetectionService _conflictDetection;
 
         // =========================================================
         // UI State
@@ -102,16 +103,17 @@ namespace PIM.Web.Pages
         // =========================================================
 
         public IndexModel(
-            IFileScanner scanner,
-            IFileNameParser parser,
-            IMetadataService metadata,
-            IDuplicateService duplicates,
-            IRenameService rename,
-            IConfiguration config,
-            IMemoryCache cache,
-            ScanProgress progress,
-            PreviewTreeService treeService,
-            IDryRunPreviewService dryRunPreviewService)
+    IFileScanner scanner,
+    IFileNameParser parser,
+    IMetadataService metadata,
+    IDuplicateService duplicates,
+    IRenameService rename,
+    IConfiguration config,
+    IMemoryCache cache,
+    ScanProgress progress,
+    PreviewTreeService treeService,
+    IDryRunPreviewService dryRunPreviewService,
+    IMovieConflictDetectionService conflictDetection)
         {
             _scanner = scanner;
             _parser = parser;
@@ -123,6 +125,7 @@ namespace PIM.Web.Pages
             _progress = progress;
             _treeService = treeService;
             _dryRunPreviewService = dryRunPreviewService;
+            _conflictDetection = conflictDetection;
         }
 
         // =========================================================
@@ -247,10 +250,16 @@ namespace PIM.Web.Pages
             }
 
             // Duplicate detection depends on IMDb IDs, so it runs after metadata enrichment.
+            _conflictDetection.ClearConflictState(movies);
+
             _duplicates.Process(movies);
 
             // Generate TargetPath values for the preview tree and commit workflow.
             _rename.GeneratePreview(movies, outputPath);
+
+            // Block any movie whose proposed target conflicts with the destination library
+            // or with known Plex library entries.
+            _conflictDetection.ApplyConflictDetection(movies, outputPath);
 
             SetCachedMovies(movies);
             _cache.Remove(DryRunPreviewCacheKey);
@@ -284,6 +293,11 @@ namespace PIM.Web.Pages
                 TempData["Message"] = "No movies are available to process.";
                 return RedirectToPage();
             }
+            var outputPath = _config["PIM:OutputPath"] ?? string.Empty;
+
+            // Re-check conflicts immediately before dry run or live commit.
+            // This protects against destination changes after the preview was generated.
+            _conflictDetection.ApplyConflictDetection(movies, outputPath);
 
             var approvedMovies = movies
                 .Where(m =>
