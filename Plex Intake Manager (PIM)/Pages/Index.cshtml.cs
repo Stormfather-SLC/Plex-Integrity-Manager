@@ -480,7 +480,7 @@ namespace PIM.Web.Pages
 
                 foreach (var movie in moviesToEnrich)
                 {
-                    _progress.CurrentFile = movie.FileName;
+                    _progress.CurrentFile = movie.FileName ?? string.Empty;
 
                     await _metadata.EnrichAsync(movie);
 
