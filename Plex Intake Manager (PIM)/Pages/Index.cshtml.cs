@@ -550,23 +550,28 @@ namespace PIM.Web.Pages
         /// The duplicate skip count intentionally uses IsDuplicate + !KeepRecommended
         /// so it matches the current dry-run preview card behavior.
         /// </summary>
+        /// <summary>
+        /// Calculates the banner summary used after dry-run or live commit.
+        ///
+        /// Important edition rule:
+        /// Alternate editions are valid keep candidates. They should count as
+        /// move/rename items when approved, not as duplicates to discard.
+        /// </summary>
         private static CommitSummary BuildCommitSummary(
-    List<Movie> allMovies,
-    List<Movie> approvedMovies)
+            List<Movie> allMovies,
+            List<Movie> approvedMovies)
         {
+            var moveCount = approvedMovies.Count;
+
             var duplicateSkipCount = allMovies.Count(m =>
                 !m.NeedsReview &&
                 !m.HasError &&
                 m.IsDuplicate &&
-                !m.KeepRecommended);
+                !m.KeepRecommended &&
+                !m.IsAlternateVersion);
 
             var reviewCount = allMovies.Count(m => m.NeedsReview);
             var errorCount = allMovies.Count(m => m.HasError);
-
-            var moveCount = allMovies.Count(m =>
-                !m.NeedsReview &&
-                !m.HasError &&
-                !(m.IsDuplicate && !m.KeepRecommended));
 
             return new CommitSummary(
                 moveCount,
