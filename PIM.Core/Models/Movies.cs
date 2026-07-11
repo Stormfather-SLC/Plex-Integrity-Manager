@@ -203,20 +203,32 @@ namespace PIM.Core.Models
         }
         public string GetNormalizedFolderName()
         {
-            if (string.IsNullOrWhiteSpace(Title) || Year == null || string.IsNullOrWhiteSpace(ImdbId))
-                throw new InvalidOperationException("Movie is missing required metadata.");
+            if (string.IsNullOrWhiteSpace(Title) ||
+                Year == null ||
+                string.IsNullOrWhiteSpace(ImdbId))
+            {
+                throw new InvalidOperationException(
+                    "Movie is missing required metadata.");
+            }
+
+            return $"{Title} ({Year}) {{imdb-{ImdbId}}}";
+        }
+
+        public string GetNormalizedFileName(string extension)
+        {
+            if (string.IsNullOrWhiteSpace(Title) ||
+                Year == null ||
+                string.IsNullOrWhiteSpace(ImdbId))
+            {
+                throw new InvalidOperationException(
+                    "Movie is missing required metadata.");
+            }
 
             var editionPart = ShouldIncludeEditionTag(VersionTag)
                 ? $" {{edition-{VersionTag!.Trim()}}}"
                 : string.Empty;
 
-            return $"{Title} ({Year}){editionPart} {{imdb-{ImdbId}}}";
-        }
-
-        public string GetNormalizedFileName(string extension)
-        {
-            var folderName = GetNormalizedFolderName();
-            return $"{folderName}{extension}";
+            return $"{Title} ({Year}){editionPart} {{imdb-{ImdbId}}}{extension}";
         }
     }
 }

@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>PIM.Web</RootNamespace>
+    <UserSecretsId>af850663-dbf9-4dfc-8ebe-db4aa70c12f6</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

@@ -4,19 +4,31 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
+using Microsoft.Extensions.Configuration;
 
 namespace PIM.Infrastructure.Metadata
 {
     public class OmdbMetadataService : IMetadataService
     {
         private readonly HttpClient _httpClient;
-        //private readonly string _apiKey = "7e1e1bbf";
-        // TODO: Move API key to User Secrets before public release.
-        private readonly string _apiKey = "3eec1c90";
+        private readonly string _apiKey;
 
-        public OmdbMetadataService(HttpClient httpClient)
+        public OmdbMetadataService(
+            HttpClient httpClient,
+            IConfiguration configuration)
         {
             _httpClient = httpClient;
+
+            _apiKey = configuration["Omdb:ApiKey"]?.Trim()
+                ?? throw new InvalidOperationException(
+                    "The OMDb API key is not configured. " +
+                    "Set the 'Omdb:ApiKey' user secret.");
+
+            if (string.IsNullOrWhiteSpace(_apiKey))
+            {
+                throw new InvalidOperationException(
+                    "The configured OMDb API key is empty.");
+            }
         }
 
         public async Task EnrichAsync(Movie movie)
@@ -41,7 +53,7 @@ namespace PIM.Infrastructure.Metadata
                 ? $"OMDb Lookup by IMDb ID: IMDb='{movie.ImdbId}', ParsedTitle='{parsedTitle}', ParsedYear='{parsedYear}'"
                 : $"OMDb Lookup by Title: Title='{parsedTitle}', Year='{parsedYear}'");
 
-            Console.WriteLine(url);
+            //Console.WriteLine(url);
 
             var response = await _httpClient.GetAsync(url);
             if (!response.IsSuccessStatusCode)
