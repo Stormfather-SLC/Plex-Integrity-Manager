@@ -1,4 +1,4 @@
-name: Build
+name: Build and Test
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ on:
       - feature/**
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,8 +21,11 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Restore
+      - name: Restore web application
         run: dotnet restore "Plex Intake Manager (PIM)/PIM.Web.csproj"
 
-      - name: Build
+      - name: Build web application
         run: dotnet build "Plex Intake Manager (PIM)/PIM.Web.csproj" --configuration Release --no-restore
+
+      - name: Run destination path tests
+        run: dotnet test "PIM.Tests/PIM.Tests.csproj" --configuration Release --verbosity normal
