@@ -30,8 +30,8 @@ public sealed class AlphabeticalBucket
 
     public static List<AlphabeticalBucket> CreateDefaultBuckets()
     {
-        return
-        [
+        return new List<AlphabeticalBucket>
+        {
             new() { FolderName = "#'s", IncludeNumbersAndSymbols = true },
             new() { FolderName = "A-C", StartLetter = "A", EndLetter = "C" },
             new() { FolderName = "D-F", StartLetter = "D", EndLetter = "F" },
@@ -41,7 +41,7 @@ public sealed class AlphabeticalBucket
             new() { FolderName = "P-R", StartLetter = "P", EndLetter = "R" },
             new() { FolderName = "S-V", StartLetter = "S", EndLetter = "V" },
             new() { FolderName = "W-Z", StartLetter = "W", EndLetter = "Z" }
-        ];
+        };
     }
 }
 
@@ -87,6 +87,7 @@ public sealed class DestinationOrganizationLevel
         if (Id == Guid.Empty)
             Id = Guid.NewGuid();
 
+        AlphabeticalBuckets ??= new List<AlphabeticalBucket>();
         Value = string.IsNullOrWhiteSpace(Value) ? null : Value.Trim();
 
         UnknownFolderName = string.IsNullOrWhiteSpace(UnknownFolderName)
@@ -126,7 +127,7 @@ public sealed class DestinationProfile
     public List<DestinationOrganizationLevel> OrganizationLevels { get; set; } = new();
 
     [JsonIgnore]
-    public string OrganizationSummary => OrganizationLevels.Count == 0
+    public string OrganizationSummary => OrganizationLevels == null || OrganizationLevels.Count == 0
         ? "Flat movie folder structure"
         : string.Join(" → ", OrganizationLevels.Select(level => level.DisplayName));
 
@@ -134,6 +135,8 @@ public sealed class DestinationProfile
     {
         if (Id == Guid.Empty)
             Id = Guid.NewGuid();
+
+        OrganizationLevels ??= new List<DestinationOrganizationLevel>();
 
         Name = string.IsNullOrWhiteSpace(Name)
             ? "Unnamed Destination Profile"
