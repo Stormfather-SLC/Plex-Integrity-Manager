@@ -1,10 +1,12 @@
-﻿using PIM.Core.Interfaces;
+using PIM.Core.Interfaces;
 using PIM.Core.Models;
 
 namespace PIM.Infrastructure.Services
 {
     public class MovieConflictDetectionService : IMovieConflictDetectionService
     {
+        private const string StandardEditionKey = "<standard>";
+
         private readonly IDestinationConflictService _destinationConflictService;
         private readonly IPlexLibraryConflictService _plexLibraryConflictService;
 
@@ -36,6 +38,7 @@ namespace PIM.Infrastructure.Services
                     {
                         movie.NeedsReview = false;
                         movie.ApprovedForCommit = ShouldBeApprovedForCommit(movie);
+                        movie.Status = "Rename preview generated";
                     }
                 }
             }
@@ -44,24 +47,30 @@ namespace PIM.Infrastructure.Services
         public void ApplyConflictDetection(List<Movie> movies, string outputPath)
         {
             ClearConflictState(movies);
+            _destinationConflictService.InvalidateCache();
 
-            foreach (var movie in movies)
+            var candidates = movies
+                .Where(IsConflictCandidate)
+                .ToList();
+
+            ApplyIncomingTargetPathCollisions(candidates);
+            ApplyIncomingSameEditionCollisions(candidates);
+
+            foreach (var movie in candidates)
             {
-                if (movie.HasError ||
-                    movie.NeedsReview ||
-                    string.IsNullOrWhiteSpace(movie.TargetPath) ||
-                    !movie.ApprovedForCommit)
-                {
+                if (movie.HasDestinationConflict || movie.NeedsReview)
                     continue;
-                }
 
-                var destinationResult = _destinationConflictService.Check(movie, outputPath);
+                var destinationResult = _destinationConflictService.Check(
+                    movie,
+                    outputPath);
 
                 if (destinationResult.HasConflict)
                 {
-                    movie.HasDestinationConflict = true;
-                    movie.DestinationConflictReason = destinationResult.Message;
-                    movie.ExistingDestinationPath = destinationResult.ExistingPath;
+                    SetDestinationConflict(
+                        movie,
+                        destinationResult.Message,
+                        destinationResult.ExistingPath);
                 }
 
                 var plexResult = _plexLibraryConflictService.Check(movie);
@@ -78,6 +87,85 @@ namespace PIM.Infrastructure.Services
                     MarkMovieForConflictReview(movie);
                 }
             }
+        }
+
+        private static void ApplyIncomingTargetPathCollisions(
+            List<Movie> candidates)
+        {
+            var collisionGroups = candidates
+                .GroupBy(
+                    movie => NormalizePath(movie.TargetPath!),
+                    StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1);
+
+            foreach (var group in collisionGroups)
+            {
+                var groupMovies = group.ToList();
+
+                foreach (var movie in groupMovies)
+                {
+                    var otherMovie = groupMovies
+                        .First(other => other.Id != movie.Id);
+
+                    SetDestinationConflict(
+                        movie,
+                        "Multiple incoming files resolve to the same target path.",
+                        otherMovie.OriginalFilePath);
+
+                    MarkMovieForConflictReview(movie);
+                }
+            }
+        }
+
+        private static void ApplyIncomingSameEditionCollisions(
+            List<Movie> candidates)
+        {
+            var collisionGroups = candidates
+                .Where(movie =>
+                    !movie.HasDestinationConflict &&
+                    !string.IsNullOrWhiteSpace(movie.ImdbId))
+                .GroupBy(
+                    BuildMovieEditionIdentityKey,
+                    StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1);
+
+            foreach (var group in collisionGroups)
+            {
+                var groupMovies = group.ToList();
+
+                foreach (var movie in groupMovies)
+                {
+                    var otherMovie = groupMovies
+                        .First(other => other.Id != movie.Id);
+
+                    SetDestinationConflict(
+                        movie,
+                        "Multiple incoming files represent the same IMDb ID and edition.",
+                        otherMovie.OriginalFilePath);
+
+                    MarkMovieForConflictReview(movie);
+                }
+            }
+        }
+
+        private static bool IsConflictCandidate(Movie movie)
+        {
+            return !movie.HasError &&
+                   !movie.NeedsReview &&
+                   movie.ApprovedForCommit &&
+                   !string.IsNullOrWhiteSpace(movie.TargetPath);
+        }
+
+        private static void SetDestinationConflict(
+            Movie movie,
+            string? message,
+            string? existingPath)
+        {
+            movie.HasDestinationConflict = true;
+            movie.DestinationConflictReason = string.IsNullOrWhiteSpace(message)
+                ? "A destination conflict was detected."
+                : message;
+            movie.ExistingDestinationPath = existingPath;
         }
 
         private static void MarkMovieForConflictReview(Movie movie)
@@ -104,7 +192,9 @@ namespace PIM.Infrastructure.Services
         {
             return !movie.NeedsReview &&
                    !movie.HasError &&
-                   (!movie.IsDuplicate || movie.KeepRecommended || movie.IsAlternateVersion);
+                   (!movie.IsDuplicate ||
+                    movie.KeepRecommended ||
+                    movie.IsAlternateVersion);
         }
 
         private static bool IsConflictReviewReason(string? reviewReason)
@@ -112,8 +202,49 @@ namespace PIM.Infrastructure.Services
             if (string.IsNullOrWhiteSpace(reviewReason))
                 return false;
 
-            return reviewReason.Contains("Destination conflict:", StringComparison.OrdinalIgnoreCase) ||
-                   reviewReason.Contains("Plex library conflict:", StringComparison.OrdinalIgnoreCase);
+            return reviewReason.Contains(
+                       "Destination conflict:",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   reviewReason.Contains(
+                       "Plex library conflict:",
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string BuildMovieEditionIdentityKey(Movie movie)
+        {
+            var imdbId = movie.ImdbId?
+                .Trim()
+                .ToUpperInvariant() ?? string.Empty;
+
+            return $"{imdbId}|{NormalizeEdition(movie.VersionTag)}";
+        }
+
+        private static string NormalizeEdition(string? edition)
+        {
+            if (string.IsNullOrWhiteSpace(edition) ||
+                edition.Trim().Equals(
+                    "Alternate Version",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return StandardEditionKey;
+            }
+
+            return edition.Trim().ToUpperInvariant();
+        }
+
+        private static string NormalizePath(string path)
+        {
+            try
+            {
+                return Path.GetFullPath(path)
+                    .TrimEnd(
+                        Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar);
+            }
+            catch
+            {
+                return path.Trim();
+            }
         }
     }
 }
