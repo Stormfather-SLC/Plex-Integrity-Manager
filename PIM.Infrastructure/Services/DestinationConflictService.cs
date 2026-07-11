@@ -1,25 +1,54 @@
-﻿using PIM.Core.Interfaces;
+using System.Text.RegularExpressions;
+using PIM.Core.Interfaces;
 using PIM.Core.Models;
 
 namespace PIM.Infrastructure.Services
 {
     public class DestinationConflictService : IDestinationConflictService
     {
+        private const string StandardEditionKey = "<standard>";
+
+        private static readonly Regex EditionRegex = new(
+            @"\{edition-(?<edition>[^}]+)\}",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private string? _cachedOutputPath;
         private List<string> _cachedDestinationEntries = new();
 
-        public DestinationConflictResult Check(Movie movie, string outputPath)
+        public void InvalidateCache()
         {
-            if (movie == null)
-                return DestinationConflictResult.NoConflict();
+            _cachedOutputPath = null;
+            _cachedDestinationEntries = new List<string>();
+        }
 
-            if (string.IsNullOrWhiteSpace(outputPath))
+        public DestinationConflictResult Check(
+            Movie movie,
+            string outputPath,
+            bool refresh = false)
+        {
+            if (movie == null ||
+                string.IsNullOrWhiteSpace(outputPath) ||
+                string.IsNullOrWhiteSpace(movie.TargetPath))
+            {
                 return DestinationConflictResult.NoConflict();
+            }
 
-            if (string.IsNullOrWhiteSpace(movie.TargetPath))
-                return DestinationConflictResult.NoConflict();
+            string targetPath;
 
-            var targetPath = Path.GetFullPath(movie.TargetPath);
+            try
+            {
+                targetPath = Path.GetFullPath(movie.TargetPath);
+            }
+            catch (Exception ex) when (
+                ex is ArgumentException ||
+                ex is NotSupportedException ||
+                ex is PathTooLongException)
+            {
+                return DestinationConflictResult.Conflict(
+                    DestinationConflictType.InvalidTargetPath,
+                    $"The proposed target path is invalid: {ex.Message}",
+                    movie.TargetPath);
+            }
 
             if (PathsEqual(targetPath, movie.OriginalFilePath))
                 return DestinationConflictResult.NoConflict();
@@ -28,41 +57,69 @@ namespace PIM.Infrastructure.Services
             {
                 return DestinationConflictResult.Conflict(
                     DestinationConflictType.TargetFileAlreadyExists,
-                    "Target file already exists.",
+                    "The exact target file already exists.",
                     targetPath);
             }
 
             var targetDirectory = Path.GetDirectoryName(targetPath);
 
+            // An existing directory is expected when another edition of the
+            // same movie is already present. Only a file occupying the folder
+            // path should block the operation.
             if (!string.IsNullOrWhiteSpace(targetDirectory) &&
-                Directory.Exists(targetDirectory))
+                File.Exists(targetDirectory))
             {
                 return DestinationConflictResult.Conflict(
-                    DestinationConflictType.TargetFolderAlreadyExists,
-                    "Target folder already exists.",
+                    DestinationConflictType.TargetDirectoryBlockedByFile,
+                    "A file exists where the target movie folder must be created.",
                     targetDirectory);
             }
 
             if (!Directory.Exists(outputPath))
                 return DestinationConflictResult.NoConflict();
 
-            var destinationEntries = GetDestinationEntries(outputPath);
+            var destinationEntries = GetDestinationEntries(outputPath, refresh);
 
             if (!string.IsNullOrWhiteSpace(movie.ImdbId))
             {
                 var imdbToken = $"{{imdb-{movie.ImdbId}}}";
+                var incomingEdition = NormalizeEdition(movie.VersionTag);
 
-                var sameImdbMatch = destinationEntries.FirstOrDefault(path =>
-                    path.Contains(imdbToken, StringComparison.OrdinalIgnoreCase) &&
-                    !PathsEqual(path, movie.OriginalFilePath) &&
-                    !PathsEqual(path, targetPath));
+                var sameEditionMatch = destinationEntries
+                    .Where(File.Exists)
+                    .FirstOrDefault(path =>
+                    {
+                        if (PathsEqual(path, movie.OriginalFilePath) ||
+                            PathsEqual(path, targetPath))
+                        {
+                            return false;
+                        }
 
-                if (!string.IsNullOrWhiteSpace(sameImdbMatch))
+                        if (!path.Contains(
+                                imdbToken,
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            return false;
+                        }
+
+                        var existingEdition = GetEditionKeyFromPath(path);
+
+                        return string.Equals(
+                            existingEdition,
+                            incomingEdition,
+                            StringComparison.OrdinalIgnoreCase);
+                    });
+
+                if (!string.IsNullOrWhiteSpace(sameEditionMatch))
                 {
+                    var editionDescription = incomingEdition == StandardEditionKey
+                        ? "the standard edition"
+                        : $"edition '{movie.VersionTag}'";
+
                     return DestinationConflictResult.Conflict(
-                        DestinationConflictType.SameImdbIdExistsInDestination,
-                        "Destination library already contains this IMDb ID.",
-                        sameImdbMatch);
+                        DestinationConflictType.SameImdbIdAndEditionExistsInDestination,
+                        $"The destination already contains the same IMDb ID and {editionDescription}.",
+                        sameEditionMatch);
                 }
             }
 
@@ -72,17 +129,27 @@ namespace PIM.Infrastructure.Services
 
                 var similarTitleYearMatch = destinationEntries.FirstOrDefault(path =>
                 {
+                    if (PathsEqual(path, movie.OriginalFilePath) ||
+                        PathsEqual(path, targetPath))
+                    {
+                        return false;
+                    }
+
                     var name = Path.GetFileName(path);
 
-                    return name.Contains(titleYearToken, StringComparison.OrdinalIgnoreCase) &&
-                           !name.Contains("{imdb-", StringComparison.OrdinalIgnoreCase);
+                    return name.Contains(
+                               titleYearToken,
+                               StringComparison.OrdinalIgnoreCase) &&
+                           !path.Contains(
+                               "{imdb-",
+                               StringComparison.OrdinalIgnoreCase);
                 });
 
                 if (!string.IsNullOrWhiteSpace(similarTitleYearMatch))
                 {
                     return DestinationConflictResult.Conflict(
                         DestinationConflictType.SimilarTitleYearExistsInDestination,
-                        "Destination library contains a similar Title + Year item without an IMDb ID.",
+                        "The destination contains a similar title and year without an IMDb ID.",
                         similarTitleYearMatch);
                 }
             }
@@ -90,23 +157,62 @@ namespace PIM.Infrastructure.Services
             return DestinationConflictResult.NoConflict();
         }
 
-        private List<string> GetDestinationEntries(string outputPath)
+        private List<string> GetDestinationEntries(
+            string outputPath,
+            bool refresh)
         {
-            var normalizedOutputPath = Path.GetFullPath(outputPath);
+            string normalizedOutputPath;
 
-            if (_cachedOutputPath != null &&
+            try
+            {
+                normalizedOutputPath = Path.GetFullPath(outputPath);
+            }
+            catch
+            {
+                return new List<string>();
+            }
+
+            if (!refresh &&
+                _cachedOutputPath != null &&
                 PathsEqual(_cachedOutputPath, normalizedOutputPath))
             {
                 return _cachedDestinationEntries;
             }
 
             _cachedOutputPath = normalizedOutputPath;
-            _cachedDestinationEntries = SafeEnumerateFileSystemEntries(normalizedOutputPath).ToList();
+            _cachedDestinationEntries = Directory.Exists(normalizedOutputPath)
+                ? SafeEnumerateFileSystemEntries(normalizedOutputPath).ToList()
+                : new List<string>();
 
             return _cachedDestinationEntries;
         }
 
-        private static IEnumerable<string> SafeEnumerateFileSystemEntries(string rootPath)
+        private static string GetEditionKeyFromPath(string path)
+        {
+            var fileName = Path.GetFileNameWithoutExtension(path);
+            var match = EditionRegex.Match(fileName);
+
+            return match.Success
+                ? NormalizeEdition(match.Groups["edition"].Value)
+                : StandardEditionKey;
+        }
+
+        private static string NormalizeEdition(string? edition)
+        {
+            if (string.IsNullOrWhiteSpace(edition) ||
+                edition.Trim().Equals(
+                    "Alternate Version",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return StandardEditionKey;
+            }
+
+            return Regex.Replace(edition.Trim(), @"\s+", " ")
+                .ToUpperInvariant();
+        }
+
+        private static IEnumerable<string> SafeEnumerateFileSystemEntries(
+            string rootPath)
         {
             var pendingDirectories = new Stack<string>();
             pendingDirectories.Push(rootPath);
@@ -119,11 +225,13 @@ namespace PIM.Infrastructure.Services
 
                 try
                 {
-                    childDirectories = Directory.EnumerateDirectories(currentDirectory).ToList();
+                    childDirectories = Directory
+                        .EnumerateDirectories(currentDirectory)
+                        .ToList();
                 }
                 catch
                 {
-                    continue;
+                    childDirectories = Array.Empty<string>();
                 }
 
                 foreach (var childDirectory in childDirectories)
@@ -136,11 +244,13 @@ namespace PIM.Infrastructure.Services
 
                 try
                 {
-                    childFiles = Directory.EnumerateFiles(currentDirectory).ToList();
+                    childFiles = Directory
+                        .EnumerateFiles(currentDirectory)
+                        .ToList();
                 }
                 catch
                 {
-                    continue;
+                    childFiles = Array.Empty<string>();
                 }
 
                 foreach (var childFile in childFiles)
@@ -150,7 +260,9 @@ namespace PIM.Infrastructure.Services
             }
         }
 
-        private static bool PathsEqual(string? firstPath, string? secondPath)
+        private static bool PathsEqual(
+            string? firstPath,
+            string? secondPath)
         {
             if (string.IsNullOrWhiteSpace(firstPath) ||
                 string.IsNullOrWhiteSpace(secondPath))
@@ -158,16 +270,27 @@ namespace PIM.Infrastructure.Services
                 return false;
             }
 
-            var firstFullPath = Path.GetFullPath(firstPath)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            try
+            {
+                var firstFullPath = Path.GetFullPath(firstPath)
+                    .TrimEnd(
+                        Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar);
 
-            var secondFullPath = Path.GetFullPath(secondPath)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var secondFullPath = Path.GetFullPath(secondPath)
+                    .TrimEnd(
+                        Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar);
 
-            return string.Equals(
-                firstFullPath,
-                secondFullPath,
-                StringComparison.OrdinalIgnoreCase);
+                return string.Equals(
+                    firstFullPath,
+                    secondFullPath,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 }
