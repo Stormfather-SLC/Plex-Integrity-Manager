@@ -1,43 +1,23 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Extensions.Caching.Memory;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 using PIM.Web.Models;
 using PIM.Web.Services;
-using System.Text.Json;
 
 namespace PIM.Web.Pages
 {
     /// <summary>
-    /// Main dashboard page for Plex Integrity Manager (PIM).
-    ///
-    /// This page owns the current MVP workflow:
-    /// 1. Scan the source library for movie files.
-    /// 2. Parse filenames into preliminary movie records.
-    /// 3. Enrich missing metadata through the configured metadata service.
-    /// 4. Detect duplicates and alternate editions.
-    /// 5. Generate the proposed Plex-friendly output structure.
-    /// 6. Run a dry run or live commit.
-    ///
-    /// NOTE:
-    /// Current state is cached in memory for the MVP. Later versions may move
-    /// scan results, preview plans, and commit history into durable storage.
+    /// Main PIM workflow: scan, identify, preview, dry run, and commit.
     /// </summary>
     public class IndexModel : PageModel
     {
-        // =========================================================
-        // Cache Keys / Defaults
-        // =========================================================
-
         private const string MovieScanCacheKey = "MovieScan";
         private const string DryRunPreviewCacheKey = "DryRunPreview";
         private const int CacheDurationMinutes = 30;
         private const int DefaultMetadataDelayMs = 250;
-
-        // =========================================================
-        // Services
-        // =========================================================
 
         private readonly IFileScanner _scanner;
         private readonly IFileNameParser _parser;
@@ -50,70 +30,41 @@ namespace PIM.Web.Pages
         private readonly PreviewTreeService _treeService;
         private readonly IDryRunPreviewService _dryRunPreviewService;
         private readonly IMovieConflictDetectionService _conflictDetection;
+        private readonly IDestinationProfileStore _profileStore;
 
-        // =========================================================
-        // UI State
-        // =========================================================
-
-        /// <summary>
-        /// When true, the results list is filtered to hide duplicate rows that
-        /// are not recommended to be kept.
-        /// </summary>
         [BindProperty(SupportsGet = true)]
         public bool ShowOnlyRecommended { get; set; }
 
-        /// <summary>
-        /// Source folder to scan for incoming movie files.
-        /// Example: Y:\Transfer Movies
-        /// </summary>
         [BindProperty]
         public string ScanPath { get; set; } = string.Empty;
 
-        /// <summary>
-        /// Destination folder where PIM will organize renamed movie files.
-        /// Example: G:\[PLEX]\Movies
-        /// </summary>
         [BindProperty]
         public string OutputPath { get; set; } = string.Empty;
 
-        /// <summary>
-        /// When true, file operations are simulated only.
-        /// This is the safest default for Alpha testing.
-        /// </summary>
         [BindProperty]
         public bool DryRun { get; set; } = true;
 
-        /// <summary>
-        /// Movies currently displayed in the results table.
-        /// </summary>
         public List<Movie> Movies { get; set; } = new();
 
-        /// <summary>
-        /// Pseudo-folder tree showing the proposed Plex output structure.
-        /// </summary>
         public FileNode? PreviewTree { get; set; }
 
-        /// <summary>
-        /// Dry-run summary and itemized preview shown after a dry-run commit.
-        /// </summary>
         public DryRunPreviewResult? DryRunPreview { get; set; }
 
-        // =========================================================
-        // Constructor
-        // =========================================================
+        public DestinationProfile ActiveDestinationProfile { get; set; } = new();
 
         public IndexModel(
-    IFileScanner scanner,
-    IFileNameParser parser,
-    IMetadataService metadata,
-    IDuplicateService duplicates,
-    IRenameService rename,
-    IConfiguration config,
-    IMemoryCache cache,
-    ScanProgress progress,
-    PreviewTreeService treeService,
-    IDryRunPreviewService dryRunPreviewService,
-    IMovieConflictDetectionService conflictDetection)
+            IFileScanner scanner,
+            IFileNameParser parser,
+            IMetadataService metadata,
+            IDuplicateService duplicates,
+            IRenameService rename,
+            IConfiguration config,
+            IMemoryCache cache,
+            ScanProgress progress,
+            PreviewTreeService treeService,
+            IDryRunPreviewService dryRunPreviewService,
+            IMovieConflictDetectionService conflictDetection,
+            IDestinationProfileStore profileStore)
         {
             _scanner = scanner;
             _parser = parser;
@@ -126,11 +77,8 @@ namespace PIM.Web.Pages
             _treeService = treeService;
             _dryRunPreviewService = dryRunPreviewService;
             _conflictDetection = conflictDetection;
+            _profileStore = profileStore;
         }
-
-        // =========================================================
-        // Page Load
-        // =========================================================
 
         public Task OnGetAsync(bool showOnlyRecommended = false)
         {
@@ -143,14 +91,6 @@ namespace PIM.Web.Pages
             return Task.CompletedTask;
         }
 
-        // =========================================================
-        // Progress Endpoint
-        // =========================================================
-
-        /// <summary>
-        /// Returns progress for long-running scan/enrichment operations.
-        /// The UI polls this endpoint while background work is running.
-        /// </summary>
         public JsonResult OnGetProgress()
         {
             return new JsonResult(new
@@ -162,21 +102,20 @@ namespace PIM.Web.Pages
             });
         }
 
-        // =========================================================
-        // Scan Library
-        // =========================================================
-
-        /// <summary>
-        /// Discovers video files and parses filename clues.
-        ///
-        /// This step intentionally does not call OMDb or any external metadata
-        /// provider. It should remain fast and filesystem-focused.
-        /// </summary>
         public IActionResult OnPostRescan()
         {
             _cache.Remove(DryRunPreviewCacheKey);
 
             var rootPath = _config["PIM:ScanPath"] ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(rootPath))
+            {
+                return new JsonResult(new
+                {
+                    started = false,
+                    message = "A source folder must be configured before scanning."
+                });
+            }
 
             ResetProgress();
             _progress.IsRunning = true;
@@ -203,9 +142,7 @@ namespace PIM.Web.Pages
                             Status = "Discovered"
                         };
 
-                        // Extract title/year guesses and version clues from the filename.
                         _parser.Parse(movie);
-
                         movies.Add(movie);
 
                         _progress.CurrentFile = fileInfo.Name;
@@ -223,43 +160,37 @@ namespace PIM.Web.Pages
             return new JsonResult(new { started = true });
         }
 
-        // =========================================================
-        // Enrich Metadata
-        // =========================================================
-
-        /// <summary>
-        /// Enriches movies that are missing IMDb metadata, then rebuilds the
-        /// duplicate decisions and proposed rename targets.
-        /// </summary>
         public async Task<IActionResult> OnPostEnrichAsync()
         {
             if (!TryGetCachedMovies(out var movies))
+                return RedirectToPage();
+
+            var profile = _profileStore.GetActiveProfile();
+            var sourceRoot = _config["PIM:ScanPath"] ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(profile.DestinationRoot))
             {
+                TempData["Message"] =
+                    $"Destination profile '{profile.Name}' needs a destination root folder.";
                 return RedirectToPage();
             }
 
-            var outputPath = _config["PIM:OutputPath"] ?? string.Empty;
-
+            // Every newly scanned movie is enriched, including files that already
+            // contain an IMDb ID. Rating and genre are required by organization
+            // profiles and are not present in the filename alone.
             var moviesToEnrich = movies
-                .Where(m => string.IsNullOrWhiteSpace(m.ImdbId))
+                .Where(movie => !movie.MetadataFetched)
                 .ToList();
 
             if (moviesToEnrich.Count > 0)
-            {
                 await EnrichMoviesAsync(moviesToEnrich);
-            }
 
-            // Duplicate detection depends on IMDb IDs, so it runs after metadata enrichment.
             _conflictDetection.ClearConflictState(movies);
-
             _duplicates.Process(movies);
-
-            // Generate TargetPath values for the preview tree and commit workflow.
-            _rename.GeneratePreview(movies, outputPath);
-
-            // Block any movie whose proposed target conflicts with the destination library
-            // or with known Plex library entries.
-            _conflictDetection.ApplyConflictDetection(movies, outputPath);
+            _rename.GeneratePreview(movies, profile, sourceRoot);
+            _conflictDetection.ApplyConflictDetection(
+                movies,
+                profile.DestinationRoot);
 
             SetCachedMovies(movies);
             _cache.Remove(DryRunPreviewCacheKey);
@@ -270,22 +201,6 @@ namespace PIM.Web.Pages
             });
         }
 
-        // =========================================================
-        // Dry Run / Commit
-        // =========================================================
-
-        /// <summary>
-        /// Executes the current plan.
-        ///
-        /// DryRun = true:
-        /// - No files are moved, renamed, or deleted.
-        /// - Statuses and preview rows are simulated for user validation.
-        ///
-        /// DryRun = false:
-        /// - Approved keep/alternate files are moved and renamed.
-        /// - Duplicate rows that are not kept are skipped/deleted according to
-        ///   the rename service behavior.
-        /// </summary>
         public IActionResult OnPostCommit()
         {
             if (!TryGetCachedMovies(out var movies))
@@ -293,34 +208,70 @@ namespace PIM.Web.Pages
                 TempData["Message"] = "No movies are available to process.";
                 return RedirectToPage();
             }
-            var outputPath = _config["PIM:OutputPath"] ?? string.Empty;
 
-            // Re-check conflicts immediately before dry run or live commit.
-            // This protects against destination changes after the preview was generated.
-            _conflictDetection.ApplyConflictDetection(movies, outputPath);
+            var profile = _profileStore.GetActiveProfile();
+            var sourceRoot = _config["PIM:ScanPath"] ?? string.Empty;
 
-            var approvedMovies = movies
-                .Where(m =>
-                    m.ApprovedForCommit &&
-                    !m.NeedsReview &&
-                    !m.HasError)
-                .ToList();
+            if (string.IsNullOrWhiteSpace(profile.DestinationRoot))
+            {
+                TempData["Message"] =
+                    $"Destination profile '{profile.Name}' needs a destination root folder.";
+                return RedirectToPage();
+            }
 
-            _rename.ExecuteChanges(approvedMovies, DryRun);
+            var profileChangedSincePreview = movies.Any(movie =>
+                !string.IsNullOrWhiteSpace(movie.TargetPath) &&
+                (movie.DestinationProfileId != profile.Id ||
+                 movie.DestinationProfileRevision != profile.Revision));
 
+            // Always rebuild the exact plan from the active profile before
+            // conflict detection. A live commit is blocked when the user changed
+            // profiles after the previous preview so a fresh dry run is required.
+            _conflictDetection.ClearConflictState(movies);
+            _rename.GeneratePreview(movies, profile, sourceRoot);
+            _conflictDetection.ApplyConflictDetection(
+                movies,
+                profile.DestinationRoot);
             SetCachedMovies(movies);
 
-            // Use one shared summary calculation for both the banner and live commit message.
-            // This prevents the top alert from drifting away from the dry-run cards.
+            if (profileChangedSincePreview && !DryRun)
+            {
+                _cache.Remove(DryRunPreviewCacheKey);
+                TempData["Message"] =
+                    "The destination profile changed after the previous preview. " +
+                    "PIM rebuilt the paths, but no files were moved. Run a new dry run before committing live.";
+
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            var approvedMovies = movies
+                .Where(movie =>
+                    movie.ApprovedForCommit &&
+                    !movie.NeedsReview &&
+                    !movie.HasError)
+                .ToList();
+
+            _rename.ExecuteChanges(
+                approvedMovies,
+                DryRun,
+                profile.DestinationRoot);
+
+            SetCachedMovies(movies);
             var summary = BuildCommitSummary(movies, approvedMovies);
 
             if (DryRun)
             {
                 DryRunPreview = _dryRunPreviewService.BuildPreview(movies);
-                _cache.Set(DryRunPreviewCacheKey, DryRunPreview, TimeSpan.FromMinutes(CacheDurationMinutes));
+                _cache.Set(
+                    DryRunPreviewCacheKey,
+                    DryRunPreview,
+                    TimeSpan.FromMinutes(CacheDurationMinutes));
 
                 TempData["Message"] =
-                    $"Dry Run Complete: " +
+                    $"Dry Run Complete using '{profile.Name}': " +
                     $"{summary.MoveCount} files would be moved, " +
                     $"{summary.DuplicateSkipCount} duplicates would be skipped, " +
                     $"{summary.ReviewCount} need review, " +
@@ -331,7 +282,7 @@ namespace PIM.Web.Pages
                 _cache.Remove(DryRunPreviewCacheKey);
 
                 TempData["Message"] =
-                    $"Changes Applied Successfully: " +
+                    $"Changes Applied using '{profile.Name}': " +
                     $"{summary.MoveCount} files processed, " +
                     $"{summary.DuplicateSkipCount} duplicates skipped, " +
                     $"{summary.ReviewCount} need review, " +
@@ -344,17 +295,6 @@ namespace PIM.Web.Pages
             });
         }
 
-        // =========================================================
-        // Save Library Settings
-        // =========================================================
-
-        /// <summary>
-        /// Saves PIM library settings back to appsettings.json.
-        ///
-        /// MVP note:
-        /// This keeps setup simple while the app is local-only. A later version
-        /// may move settings to a user profile or database-backed configuration.
-        /// </summary>
         public IActionResult OnPostSaveSettings()
         {
             try
@@ -363,7 +303,9 @@ namespace PIM.Web.Pages
                     Directory.GetCurrentDirectory(),
                     "appsettings.json");
 
-                var delayMs = _config.GetValue<int>("PIM:MetadataDelayMs", DefaultMetadataDelayMs);
+                var delayMs = _config.GetValue<int>(
+                    "PIM:MetadataDelayMs",
+                    DefaultMetadataDelayMs);
 
                 var updatedSettings = new Dictionary<string, object?>
                 {
@@ -390,7 +332,13 @@ namespace PIM.Web.Pages
 
                 System.IO.File.WriteAllText(appSettingsPath, json);
 
-                TempData["Message"] = "Settings saved successfully.";
+                var profile = _profileStore.GetActiveProfile();
+                profile.DestinationRoot = OutputPath;
+                _profileStore.Save(profile);
+
+                _cache.Remove(DryRunPreviewCacheKey);
+                TempData["Message"] =
+                    "Library settings and the active destination profile were saved.";
             }
             catch (Exception ex)
             {
@@ -403,14 +351,11 @@ namespace PIM.Web.Pages
             });
         }
 
-        // =========================================================
-        // Private Helpers: Cache / Page State
-        // =========================================================
-
         private void LoadConfiguredPaths()
         {
+            ActiveDestinationProfile = _profileStore.GetActiveProfile();
             ScanPath = _config["PIM:ScanPath"] ?? string.Empty;
-            OutputPath = _config["PIM:OutputPath"] ?? string.Empty;
+            OutputPath = ActiveDestinationProfile.DestinationRoot;
         }
 
         private void LoadCachedMovies(bool showOnlyRecommended)
@@ -422,15 +367,39 @@ namespace PIM.Web.Pages
                 return;
             }
 
+            var planUsesDifferentProfile = cachedMovies.Any(movie =>
+                !string.IsNullOrWhiteSpace(movie.TargetPath) &&
+                (movie.DestinationProfileId != ActiveDestinationProfile.Id ||
+                 movie.DestinationProfileRevision != ActiveDestinationProfile.Revision));
+
+            if (planUsesDifferentProfile &&
+                !string.IsNullOrWhiteSpace(ActiveDestinationProfile.DestinationRoot))
+            {
+                _conflictDetection.ClearConflictState(cachedMovies);
+                _rename.GeneratePreview(
+                    cachedMovies,
+                    ActiveDestinationProfile,
+                    ScanPath);
+                _conflictDetection.ApplyConflictDetection(
+                    cachedMovies,
+                    ActiveDestinationProfile.DestinationRoot);
+
+                SetCachedMovies(cachedMovies);
+                _cache.Remove(DryRunPreviewCacheKey);
+            }
+
             var sortedMovies = cachedMovies
-                .OrderBy(m => m.Title)
-                .ThenByDescending(m => m.KeepRecommended)
-                .ThenByDescending(m => m.FileSizeBytes)
+                .OrderBy(movie => movie.Title)
+                .ThenByDescending(movie => movie.KeepRecommended)
+                .ThenByDescending(movie => movie.FileSizeBytes)
                 .ToList();
 
             Movies = showOnlyRecommended
                 ? sortedMovies
-                    .Where(m => !m.IsDuplicate || m.KeepRecommended || m.IsAlternateVersion)
+                    .Where(movie =>
+                        !movie.IsDuplicate ||
+                        movie.KeepRecommended ||
+                        movie.IsAlternateVersion)
                     .ToList()
                 : sortedMovies;
 
@@ -439,7 +408,9 @@ namespace PIM.Web.Pages
 
         private void LoadCachedDryRunPreview()
         {
-            if (_cache.TryGetValue(DryRunPreviewCacheKey, out DryRunPreviewResult? dryRunPreview))
+            if (_cache.TryGetValue(
+                    DryRunPreviewCacheKey,
+                    out DryRunPreviewResult? dryRunPreview))
             {
                 DryRunPreview = dryRunPreview;
             }
@@ -447,8 +418,10 @@ namespace PIM.Web.Pages
 
         private bool TryGetCachedMovies(out List<Movie> movies)
         {
-            if (_cache.TryGetValue(MovieScanCacheKey, out List<Movie>? cachedMovies)
-                && cachedMovies != null)
+            if (_cache.TryGetValue(
+                    MovieScanCacheKey,
+                    out List<Movie>? cachedMovies) &&
+                cachedMovies != null)
             {
                 movies = cachedMovies;
                 return true;
@@ -460,12 +433,11 @@ namespace PIM.Web.Pages
 
         private void SetCachedMovies(List<Movie> movies)
         {
-            _cache.Set(MovieScanCacheKey, movies, TimeSpan.FromMinutes(CacheDurationMinutes));
+            _cache.Set(
+                MovieScanCacheKey,
+                movies,
+                TimeSpan.FromMinutes(CacheDurationMinutes));
         }
-
-        // =========================================================
-        // Private Helpers: Metadata / Progress
-        // =========================================================
 
         private async Task EnrichMoviesAsync(List<Movie> moviesToEnrich)
         {
@@ -476,25 +448,24 @@ namespace PIM.Web.Pages
 
             try
             {
-                var delayMs = _config.GetValue<int>("PIM:MetadataDelayMs", DefaultMetadataDelayMs);
+                var delayMs = _config.GetValue<int>(
+                    "PIM:MetadataDelayMs",
+                    DefaultMetadataDelayMs);
 
                 foreach (var movie in moviesToEnrich)
                 {
                     _progress.CurrentFile = movie.FileName ?? string.Empty;
-
                     await _metadata.EnrichAsync(movie);
 
                     if (delayMs > 0)
-                    {
                         await Task.Delay(delayMs);
-                    }
 
                     if (string.IsNullOrWhiteSpace(movie.ImdbId))
                     {
                         movie.NeedsReview = true;
                         movie.Status = "Metadata Not Found";
                     }
-                    else
+                    else if (!movie.NeedsReview)
                     {
                         movie.Status = "Metadata Enriched";
                     }
@@ -516,22 +487,14 @@ namespace PIM.Web.Pages
             _progress.IsRunning = isRunning;
         }
 
-        // =========================================================
-        // Private Helpers: Preview / Summary
-        // =========================================================
-
-        /// <summary>
-        /// Builds the pseudo-folder tree for the proposed Plex output structure.
-        /// Uses TargetPath values generated by IRenameService.
-        /// </summary>
         private void BuildPreviewTree()
         {
-            var outputPath = _config["PIM:OutputPath"] ?? string.Empty;
-
-            if (!string.IsNullOrWhiteSpace(outputPath) &&
-                Movies.Any(m => !string.IsNullOrWhiteSpace(m.TargetPath)))
+            if (!string.IsNullOrWhiteSpace(ActiveDestinationProfile.DestinationRoot) &&
+                Movies.Any(movie => !string.IsNullOrWhiteSpace(movie.TargetPath)))
             {
-                PreviewTree = _treeService.BuildTree(Movies, outputPath);
+                PreviewTree = _treeService.BuildTree(
+                    Movies,
+                    ActiveDestinationProfile.DestinationRoot);
             }
             else
             {
@@ -539,39 +502,21 @@ namespace PIM.Web.Pages
             }
         }
 
-        /// <summary>
-        /// Calculates the banner summary used after dry-run or live commit.
-        ///
-        /// Important edition rule:
-        /// Alternate editions are valid keep candidates. They should count as
-        /// move/rename items when approved, not as duplicates to discard.
-        ///
-        /// Important duplicate rule:
-        /// The duplicate skip count intentionally uses IsDuplicate + !KeepRecommended
-        /// so it matches the current dry-run preview card behavior.
-        /// </summary>
-        /// <summary>
-        /// Calculates the banner summary used after dry-run or live commit.
-        ///
-        /// Important edition rule:
-        /// Alternate editions are valid keep candidates. They should count as
-        /// move/rename items when approved, not as duplicates to discard.
-        /// </summary>
         private static CommitSummary BuildCommitSummary(
             List<Movie> allMovies,
             List<Movie> approvedMovies)
         {
             var moveCount = approvedMovies.Count;
 
-            var duplicateSkipCount = allMovies.Count(m =>
-                !m.NeedsReview &&
-                !m.HasError &&
-                m.IsDuplicate &&
-                !m.KeepRecommended &&
-                !m.IsAlternateVersion);
+            var duplicateSkipCount = allMovies.Count(movie =>
+                !movie.NeedsReview &&
+                !movie.HasError &&
+                movie.IsDuplicate &&
+                !movie.KeepRecommended &&
+                !movie.IsAlternateVersion);
 
-            var reviewCount = allMovies.Count(m => m.NeedsReview);
-            var errorCount = allMovies.Count(m => m.HasError);
+            var reviewCount = allMovies.Count(movie => movie.NeedsReview);
+            var errorCount = allMovies.Count(movie => movie.HasError);
 
             return new CommitSummary(
                 moveCount,
