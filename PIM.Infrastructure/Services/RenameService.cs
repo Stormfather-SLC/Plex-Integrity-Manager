@@ -23,7 +23,9 @@ namespace PIM.Infrastructure.Services
         }
 
         /// <summary>
-        /// Generates proposed target paths for all rename-ready movies.
+        /// Generates proposed target paths whenever the required metadata exists.
+        /// Review rows remain unapproved, but their proposed paths are retained so
+        /// same-batch destination collisions can still be detected and explained.
         /// </summary>
         public void GeneratePreview(List<Movie> movies, string basePath)
         {
@@ -32,15 +34,12 @@ namespace PIM.Infrastructure.Services
 
             foreach (var movie in movies)
             {
-                if (movie.NeedsReview || movie.HasError)
+                if (movie.HasError)
                 {
                     ClearTarget(movie);
                     movie.ApprovedForCommit = false;
-
-                    movie.Status = movie.HasError
-                        ? movie.ErrorMessage ?? "Error requires attention before rename preview"
-                        : movie.ReviewReason ?? "Review required before rename preview";
-
+                    movie.Status = movie.ErrorMessage ??
+                                   "Error requires attention before rename preview";
                     continue;
                 }
 
@@ -75,7 +74,9 @@ namespace PIM.Infrastructure.Services
                          movie.KeepRecommended ||
                          movie.IsAlternateVersion);
 
-                    movie.Status = "Rename preview generated";
+                    movie.Status = movie.NeedsReview
+                        ? movie.ReviewReason ?? "Review required before rename preview"
+                        : "Rename preview generated";
                 }
                 catch (Exception ex)
                 {
