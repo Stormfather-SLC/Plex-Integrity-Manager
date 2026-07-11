@@ -1,5 +1,6 @@
 using PIM.Core.Models;
 using PIM.Infrastructure.Services;
+using Xunit;
 
 namespace PIM.Tests;
 
