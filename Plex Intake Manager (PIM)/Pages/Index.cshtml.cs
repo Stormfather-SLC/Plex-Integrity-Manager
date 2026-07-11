@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -16,6 +18,7 @@ namespace PIM.Web.Pages
     {
         private const string MovieScanCacheKey = "MovieScan";
         private const string DryRunPreviewCacheKey = "DryRunPreview";
+        private const string DryRunApprovalCacheKey = "DryRunApproval";
         private const int CacheDurationMinutes = 30;
         private const int DefaultMetadataDelayMs = 250;
 
@@ -104,7 +107,7 @@ namespace PIM.Web.Pages
 
         public IActionResult OnPostRescan()
         {
-            _cache.Remove(DryRunPreviewCacheKey);
+            InvalidateDryRunApproval();
 
             var rootPath = _config["PIM:ScanPath"] ?? string.Empty;
 
@@ -193,7 +196,7 @@ namespace PIM.Web.Pages
                 profile.DestinationRoot);
 
             SetCachedMovies(movies);
-            _cache.Remove(DryRunPreviewCacheKey);
+            InvalidateDryRunApproval();
 
             return RedirectToPage(new
             {
@@ -219,14 +222,8 @@ namespace PIM.Web.Pages
                 return RedirectToPage();
             }
 
-            var profileChangedSincePreview = movies.Any(movie =>
-                !string.IsNullOrWhiteSpace(movie.TargetPath) &&
-                (movie.DestinationProfileId != profile.Id ||
-                 movie.DestinationProfileRevision != profile.Revision));
-
-            // Always rebuild the exact plan from the active profile before
-            // conflict detection. A live commit is blocked when the user changed
-            // profiles after the previous preview so a fresh dry run is required.
+            // Rebuild the exact current plan immediately before either a dry run
+            // or a live commit. This catches profile edits and destination changes.
             _conflictDetection.ClearConflictState(movies);
             _rename.GeneratePreview(movies, profile, sourceRoot);
             _conflictDetection.ApplyConflictDetection(
@@ -234,25 +231,28 @@ namespace PIM.Web.Pages
                 profile.DestinationRoot);
             SetCachedMovies(movies);
 
-            if (profileChangedSincePreview && !DryRun)
-            {
-                _cache.Remove(DryRunPreviewCacheKey);
-                TempData["Message"] =
-                    "The destination profile changed after the previous preview. " +
-                    "PIM rebuilt the paths, but no files were moved. Run a new dry run before committing live.";
-
-                return RedirectToPage(new
-                {
-                    showOnlyRecommended = ShowOnlyRecommended
-                });
-            }
-
             var approvedMovies = movies
                 .Where(movie =>
                     movie.ApprovedForCommit &&
                     !movie.NeedsReview &&
                     !movie.HasError)
                 .ToList();
+
+            var currentPlanFingerprint = BuildPlanFingerprint(movies, profile);
+
+            if (!DryRun && !HasMatchingDryRunApproval(
+                    profile,
+                    currentPlanFingerprint))
+            {
+                TempData["Message"] =
+                    "No files were moved. The current destination plan does not have a matching dry-run approval. " +
+                    "Run a new dry run, review the results, and then return to live commit.";
+
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
 
             _rename.ExecuteChanges(
                 approvedMovies,
@@ -269,6 +269,14 @@ namespace PIM.Web.Pages
                     DryRunPreviewCacheKey,
                     DryRunPreview,
                     TimeSpan.FromMinutes(CacheDurationMinutes));
+                _cache.Set(
+                    DryRunApprovalCacheKey,
+                    new DryRunApproval(
+                        profile.Id,
+                        profile.Revision,
+                        currentPlanFingerprint,
+                        DateTime.UtcNow),
+                    TimeSpan.FromMinutes(CacheDurationMinutes));
 
                 TempData["Message"] =
                     $"Dry Run Complete using '{profile.Name}': " +
@@ -279,7 +287,7 @@ namespace PIM.Web.Pages
             }
             else
             {
-                _cache.Remove(DryRunPreviewCacheKey);
+                InvalidateDryRunApproval();
 
                 TempData["Message"] =
                     $"Changes Applied using '{profile.Name}': " +
@@ -336,7 +344,7 @@ namespace PIM.Web.Pages
                 profile.DestinationRoot = OutputPath;
                 _profileStore.Save(profile);
 
-                _cache.Remove(DryRunPreviewCacheKey);
+                InvalidateDryRunApproval();
                 TempData["Message"] =
                     "Library settings and the active destination profile were saved.";
             }
@@ -385,7 +393,7 @@ namespace PIM.Web.Pages
                     ActiveDestinationProfile.DestinationRoot);
 
                 SetCachedMovies(cachedMovies);
-                _cache.Remove(DryRunPreviewCacheKey);
+                InvalidateDryRunApproval();
             }
 
             var sortedMovies = cachedMovies
@@ -502,6 +510,57 @@ namespace PIM.Web.Pages
             }
         }
 
+        private bool HasMatchingDryRunApproval(
+            DestinationProfile profile,
+            string currentPlanFingerprint)
+        {
+            return _cache.TryGetValue(
+                       DryRunApprovalCacheKey,
+                       out DryRunApproval? approval) &&
+                   approval != null &&
+                   approval.ProfileId == profile.Id &&
+                   approval.ProfileRevision == profile.Revision &&
+                   string.Equals(
+                       approval.PlanFingerprint,
+                       currentPlanFingerprint,
+                       StringComparison.Ordinal);
+        }
+
+        private void InvalidateDryRunApproval()
+        {
+            _cache.Remove(DryRunPreviewCacheKey);
+            _cache.Remove(DryRunApprovalCacheKey);
+        }
+
+        private static string BuildPlanFingerprint(
+            IEnumerable<Movie> movies,
+            DestinationProfile profile)
+        {
+            var planLines = movies
+                .OrderBy(movie => movie.Id)
+                .Select(movie => string.Join(
+                    '|',
+                    movie.Id.ToString("N"),
+                    movie.TargetPath ?? string.Empty,
+                    movie.ApprovedForCommit,
+                    movie.NeedsReview,
+                    movie.HasError,
+                    movie.HasDestinationConflict,
+                    movie.HasPlexLibraryConflict));
+
+            var payload = string.Join(
+                Environment.NewLine,
+                new[]
+                {
+                    profile.Id.ToString("N"),
+                    profile.Revision.ToString(),
+                    profile.DestinationRoot
+                }.Concat(planLines));
+
+            return Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+        }
+
         private static CommitSummary BuildCommitSummary(
             List<Movie> allMovies,
             List<Movie> approvedMovies)
@@ -524,6 +583,12 @@ namespace PIM.Web.Pages
                 reviewCount,
                 errorCount);
         }
+
+        private sealed record DryRunApproval(
+            Guid ProfileId,
+            int ProfileRevision,
+            string PlanFingerprint,
+            DateTime CreatedUtc);
 
         private sealed record CommitSummary(
             int MoveCount,
