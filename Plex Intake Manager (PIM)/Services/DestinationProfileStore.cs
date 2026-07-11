@@ -165,8 +165,15 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
                 json,
                 _jsonOptions);
 
-            if (document == null || document.Profiles.Count == 0)
+            if (document?.Profiles == null || document.Profiles.Count == 0)
                 throw new InvalidDataException("No destination profiles were found.");
+
+            document.Profiles = document.Profiles
+                .Where(profile => profile != null)
+                .ToList();
+
+            if (document.Profiles.Count == 0)
+                throw new InvalidDataException("No valid destination profiles were found.");
 
             foreach (var profile in document.Profiles)
                 profile.Normalize();
@@ -202,6 +209,13 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
 
     private void SaveDocument(DestinationProfileDocument document)
     {
+        ArgumentNullException.ThrowIfNull(document);
+
+        document.Profiles ??= new List<DestinationProfile>();
+
+        if (document.Profiles.Count == 0)
+            throw new InvalidOperationException("At least one destination profile is required.");
+
         foreach (var profile in document.Profiles)
             profile.Normalize();
 
@@ -226,35 +240,35 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
         {
             Name = "Rating then Genre",
             DestinationRoot = configuredRoot,
-            OrganizationLevels =
-            [
+            OrganizationLevels = new List<DestinationOrganizationLevel>
+            {
                 DestinationOrganizationLevel.Create(
                     OrganizationLevelType.MpaRating),
                 DestinationOrganizationLevel.Create(
                     OrganizationLevelType.PrimaryGenre)
-            ]
+            }
         };
 
         var genreThenRating = new DestinationProfile
         {
             Name = "Genre then Rating",
             DestinationRoot = configuredRoot,
-            OrganizationLevels =
-            [
+            OrganizationLevels = new List<DestinationOrganizationLevel>
+            {
                 DestinationOrganizationLevel.Create(
                     OrganizationLevelType.PrimaryGenre),
                 DestinationOrganizationLevel.Create(
                     OrganizationLevelType.MpaRating)
-            ]
+            }
         };
 
         var categoryThenAlphabetical = new DestinationProfile
         {
             Name = "Category then Alphabetical Range",
             DestinationRoot = configuredRoot,
-            OrganizationLevels =
-            [
-                new DestinationOrganizationLevel
+            OrganizationLevels = new List<DestinationOrganizationLevel>
+            {
+                new()
                 {
                     Type = OrganizationLevelType.LibraryCategory,
                     Value = "10-Everything Else",
@@ -262,18 +276,18 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
                 },
                 DestinationOrganizationLevel.Create(
                     OrganizationLevelType.AlphabeticalRange)
-            ]
+            }
         };
 
         var preserveSource = new DestinationProfile
         {
             Name = "Preserve Source Folders",
             DestinationRoot = configuredRoot,
-            OrganizationLevels =
-            [
+            OrganizationLevels = new List<DestinationOrganizationLevel>
+            {
                 DestinationOrganizationLevel.Create(
                     OrganizationLevelType.PreserveSourceFolders)
-            ]
+            }
         };
 
         var profiles = new List<DestinationProfile>
@@ -309,6 +323,6 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
     {
         public Guid ActiveProfileId { get; set; }
 
-        public List<DestinationProfile> Profiles { get; set; } = new();
+        public List<DestinationProfile>? Profiles { get; set; } = new();
     }
 }
