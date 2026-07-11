@@ -5,32 +5,31 @@ namespace PIM.Infrastructure.Services
 {
     /// <summary>
     /// Generates Plex-friendly movie paths and performs approved file moves.
-    ///
-    /// All editions of one movie share a parent folder:
-    /// /Movies
-    ///     /The Dark Knight (2008) {imdb-tt0468569}
-    ///         The Dark Knight (2008) {imdb-tt0468569}.mkv
-    ///         The Dark Knight (2008) {edition-IMAX} {imdb-tt0468569}.mkv
+    /// Organization folders are calculated by IDestinationPathBuilder so the
+    /// same path is used by preview, conflict detection, and live commit.
     /// </summary>
     public class RenameService : IRenameService
     {
         private readonly IDestinationConflictService _destinationConflictService;
+        private readonly IDestinationPathBuilder _destinationPathBuilder;
 
         public RenameService(
-            IDestinationConflictService destinationConflictService)
+            IDestinationConflictService destinationConflictService,
+            IDestinationPathBuilder destinationPathBuilder)
         {
             _destinationConflictService = destinationConflictService;
+            _destinationPathBuilder = destinationPathBuilder;
         }
 
-        /// <summary>
-        /// Generates proposed target paths whenever the required metadata exists.
-        /// Review rows remain unapproved, but their proposed paths are retained so
-        /// same-batch destination collisions can still be detected and explained.
-        /// </summary>
-        public void GeneratePreview(List<Movie> movies, string basePath)
+        public void GeneratePreview(
+            List<Movie> movies,
+            DestinationProfile profile,
+            string sourceRoot)
         {
             if (movies == null || movies.Count == 0)
                 return;
+
+            ArgumentNullException.ThrowIfNull(profile);
 
             foreach (var movie in movies)
             {
@@ -58,15 +57,17 @@ namespace PIM.Infrastructure.Services
                     var extension = GetSafeExtension(
                         movie.FileName ?? movie.OriginalFilePath);
 
-                    // Movie owns the canonical naming rules so the preview,
-                    // conflict detector, and commit process stay consistent.
-                    var folderName = movie.GetNormalizedFolderName();
-                    var fileName = movie.GetNormalizedFileName(extension);
-                    var targetPath = Path.Combine(basePath, folderName, fileName);
+                    var destination = _destinationPathBuilder.Build(
+                        movie,
+                        profile,
+                        sourceRoot,
+                        extension);
 
-                    movie.NormalizedFolderName = folderName;
-                    movie.NormalizedFileName = fileName;
-                    movie.TargetPath = targetPath;
+                    movie.NormalizedFolderName = destination.MovieFolderName;
+                    movie.NormalizedFileName = destination.FileName;
+                    movie.TargetPath = destination.FullFilePath;
+                    movie.DestinationProfileId = profile.Id;
+                    movie.DestinationProfileRevision = profile.Revision;
 
                     movie.ApprovedForCommit =
                         !movie.NeedsReview &&
@@ -76,10 +77,13 @@ namespace PIM.Infrastructure.Services
 
                     movie.Status = movie.NeedsReview
                         ? movie.ReviewReason ?? "Review required before rename preview"
-                        : "Rename preview generated";
+                        : destination.Warnings.Count == 0
+                            ? "Rename preview generated"
+                            : $"Rename preview generated with warning: {string.Join(" ", destination.Warnings)}";
                 }
                 catch (Exception ex)
                 {
+                    ClearTarget(movie);
                     movie.Status = "Rename error";
                     movie.ErrorMessage = ex.Message;
                     movie.ApprovedForCommit = false;
@@ -91,10 +95,18 @@ namespace PIM.Infrastructure.Services
         /// Simulates or performs approved moves. Live moves receive a fresh
         /// destination-conflict check immediately before each file operation.
         /// </summary>
-        public void ExecuteChanges(List<Movie> movies, bool dryRun)
+        public void ExecuteChanges(
+            List<Movie> movies,
+            bool dryRun,
+            string destinationRoot)
         {
             if (movies == null || movies.Count == 0)
                 return;
+
+            if (string.IsNullOrWhiteSpace(destinationRoot))
+                throw new InvalidOperationException("Destination root is required.");
+
+            var normalizedDestinationRoot = Path.GetFullPath(destinationRoot);
 
             foreach (var movie in movies)
             {
@@ -131,6 +143,10 @@ namespace PIM.Infrastructure.Services
                         continue;
                     }
 
+                    EnsureTargetIsUnderRoot(
+                        normalizedDestinationRoot,
+                        movie.TargetPath);
+
                     if (dryRun)
                     {
                         movie.Status = "Dry Run Complete";
@@ -144,14 +160,9 @@ namespace PIM.Infrastructure.Services
                         continue;
                     }
 
-                    // Derive the root from the actual proposed TargetPath rather
-                    // than configuration, so the final check always protects the
-                    // exact location where this file is about to be moved.
-                    var outputPath = ResolveOutputPath(movie.TargetPath);
-
                     var destinationResult = _destinationConflictService.Check(
                         movie,
-                        outputPath,
+                        normalizedDestinationRoot,
                         refresh: true);
 
                     if (destinationResult.HasConflict)
@@ -163,12 +174,8 @@ namespace PIM.Infrastructure.Services
                     var targetDirectory = Path.GetDirectoryName(movie.TargetPath);
 
                     if (!string.IsNullOrWhiteSpace(targetDirectory))
-                    {
                         Directory.CreateDirectory(targetDirectory);
-                    }
 
-                    // Close the small race between the full destination scan
-                    // and the move itself. File.Move also keeps overwrite off.
                     if (File.Exists(movie.TargetPath))
                     {
                         MarkRuntimeDestinationConflict(
@@ -177,7 +184,6 @@ namespace PIM.Infrastructure.Services
                                 DestinationConflictType.TargetFileAlreadyExists,
                                 "The exact target file appeared before the move could be completed.",
                                 movie.TargetPath));
-
                         continue;
                     }
 
@@ -217,14 +223,29 @@ namespace PIM.Infrastructure.Services
             }
         }
 
-        private static string ResolveOutputPath(string targetPath)
+        private static void EnsureTargetIsUnderRoot(
+            string destinationRoot,
+            string targetPath)
         {
-            var movieFolder = Path.GetDirectoryName(Path.GetFullPath(targetPath));
+            var root = Path.GetFullPath(destinationRoot)
+                .TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
 
-            if (string.IsNullOrWhiteSpace(movieFolder))
-                return string.Empty;
+            var target = Path.GetFullPath(targetPath)
+                .TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
 
-            return Directory.GetParent(movieFolder)?.FullName ?? movieFolder;
+            var rootPrefix = root + Path.DirectorySeparatorChar;
+
+            if (!target.StartsWith(
+                    rootPrefix,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "The target path is outside the selected destination root.");
+            }
         }
 
         private static void MarkRuntimeDestinationConflict(
@@ -254,6 +275,8 @@ namespace PIM.Infrastructure.Services
             movie.NormalizedFolderName = null;
             movie.NormalizedFileName = null;
             movie.TargetPath = null;
+            movie.DestinationProfileId = null;
+            movie.DestinationProfileRevision = 0;
         }
 
         private static string GetSafeExtension(string? fileName)
