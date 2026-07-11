@@ -1,10 +1,10 @@
-﻿using System.Net.Http;
+using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
-using Microsoft.Extensions.Configuration;
 
 namespace PIM.Infrastructure.Metadata
 {
@@ -53,8 +53,6 @@ namespace PIM.Infrastructure.Metadata
                 ? $"OMDb Lookup by IMDb ID: IMDb='{movie.ImdbId}', ParsedTitle='{parsedTitle}', ParsedYear='{parsedYear}'"
                 : $"OMDb Lookup by Title: Title='{parsedTitle}', Year='{parsedYear}'");
 
-            //Console.WriteLine(url);
-
             var response = await _httpClient.GetAsync(url);
             if (!response.IsSuccessStatusCode)
                 return;
@@ -89,6 +87,9 @@ namespace PIM.Infrastructure.Metadata
             movie.Title = data.Title;
             movie.Year = metadataYear ?? movie.Year;
             movie.ImdbId = data.ImdbID;
+            movie.MpaRating = NormalizeMetadataValue(data.Rated);
+            movie.Genres = ParseGenres(data.Genre);
+            movie.PrimaryGenre = movie.Genres.FirstOrDefault();
             movie.MetadataFetched = true;
 
             if (movie.MatchConfidence < 85)
@@ -105,6 +106,29 @@ namespace PIM.Infrastructure.Metadata
                 movie.ReviewReason = null;
                 movie.Status = hasImdbId ? "IMDb ID Match" : "Metadata Enriched";
             }
+        }
+
+        private static string? NormalizeMetadataValue(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? null
+                : value.Trim();
+        }
+
+        private static List<string> ParseGenres(string? rawGenres)
+        {
+            if (string.IsNullOrWhiteSpace(rawGenres) ||
+                rawGenres.Equals("N/A", StringComparison.OrdinalIgnoreCase))
+            {
+                return new List<string>();
+            }
+
+            return rawGenres
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(genre => genre.Trim())
+                .Where(genre => !string.IsNullOrWhiteSpace(genre))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         private static int? ParseYear(string? rawYear)
@@ -228,13 +252,18 @@ namespace PIM.Infrastructure.Metadata
 
         private class OmdbResponse
         {
-            public string Title { get; set; } = "";
-            public string Year { get; set; } = "";
+            public string Title { get; set; } = string.Empty;
+
+            public string Year { get; set; } = string.Empty;
+
+            public string Rated { get; set; } = string.Empty;
+
+            public string Genre { get; set; } = string.Empty;
 
             [JsonPropertyName("imdbID")]
-            public string ImdbID { get; set; } = "";
+            public string ImdbID { get; set; } = string.Empty;
 
-            public string Response { get; set; } = "";
+            public string Response { get; set; } = string.Empty;
         }
     }
 }
