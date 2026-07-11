@@ -12,13 +12,16 @@ namespace PIM.Infrastructure.Services
     {
         private readonly IDestinationConflictService _destinationConflictService;
         private readonly IDestinationPathBuilder _destinationPathBuilder;
+        private readonly ScanProgress _progress;
 
         public RenameService(
             IDestinationConflictService destinationConflictService,
-            IDestinationPathBuilder destinationPathBuilder)
+            IDestinationPathBuilder destinationPathBuilder,
+            ScanProgress progress)
         {
             _destinationConflictService = destinationConflictService;
             _destinationPathBuilder = destinationPathBuilder;
+            _progress = progress;
         }
 
         public void GeneratePreview(
@@ -92,8 +95,9 @@ namespace PIM.Infrastructure.Services
         }
 
         /// <summary>
-        /// Simulates or performs approved moves. Live moves receive a fresh
-        /// destination-conflict check immediately before each file operation.
+        /// Simulates or performs approved moves. The destination snapshot created
+        /// immediately before commit is reused for the full batch rather than
+        /// recursively rescanning the destination library once per movie.
         /// </summary>
         public void ExecuteChanges(
             List<Movie> movies,
@@ -107,119 +111,191 @@ namespace PIM.Infrastructure.Services
                 throw new InvalidOperationException("Destination root is required.");
 
             var normalizedDestinationRoot = Path.GetFullPath(destinationRoot);
+            var operationName = dryRun ? "Dry Run" : "Live Commit";
 
-            foreach (var movie in movies)
+            _progress.Operation = operationName;
+            _progress.Total = movies.Count;
+            _progress.Processed = 0;
+            _progress.CurrentFile = string.Empty;
+            _progress.Message = dryRun
+                ? "Simulating approved file operations..."
+                : "Preparing approved file moves...";
+            _progress.IsRunning = true;
+
+            Console.WriteLine(
+                $"[PIM] {operationName} started for {movies.Count:N0} approved file(s). " +
+                $"Destination: {normalizedDestinationRoot}");
+
+            try
             {
-                try
+                foreach (var movie in movies)
                 {
-                    if (movie.NeedsReview ||
-                        movie.HasError ||
-                        !movie.ApprovedForCommit)
-                    {
-                        movie.ApprovedForCommit = false;
+                    var displayName = movie.FileName ??
+                                      Path.GetFileName(movie.OriginalFilePath) ??
+                                      movie.Title ??
+                                      "Unknown movie";
 
-                        if (movie.HasError)
+                    _progress.CurrentFile = displayName;
+                    _progress.Message = dryRun
+                        ? "Simulating move and rename..."
+                        : "Checking the final destination and moving the file...";
+
+                    Console.WriteLine(
+                        $"[PIM] {(dryRun ? "Dry run" : "Processing")}: {displayName}");
+
+                    try
+                    {
+                        if (movie.NeedsReview ||
+                            movie.HasError ||
+                            !movie.ApprovedForCommit)
                         {
-                            movie.Status = movie.ErrorMessage ??
-                                           "Error requires attention before commit";
+                            movie.ApprovedForCommit = false;
+
+                            if (movie.HasError)
+                            {
+                                movie.Status = movie.ErrorMessage ??
+                                               "Error requires attention before commit";
+                            }
+                            else if (movie.NeedsReview)
+                            {
+                                movie.Status = movie.ReviewReason ??
+                                               "Review required before commit";
+                            }
+                            else
+                            {
+                                movie.Status = "Not approved for commit";
+                            }
+
+                            Console.WriteLine(
+                                $"[PIM] Skipped: {displayName} - {movie.Status}");
+                            continue;
                         }
-                        else if (movie.NeedsReview)
+
+                        if (string.IsNullOrWhiteSpace(movie.TargetPath))
                         {
-                            movie.Status = movie.ReviewReason ??
-                                           "Review required before commit";
+                            movie.Status = "Missing Target Path";
+                            movie.ApprovedForCommit = false;
+                            Console.WriteLine(
+                                $"[PIM] Skipped: {displayName} - missing target path.");
+                            continue;
+                        }
+
+                        EnsureTargetIsUnderRoot(
+                            normalizedDestinationRoot,
+                            movie.TargetPath);
+
+                        if (dryRun)
+                        {
+                            movie.Status = "Dry Run Complete";
+                            Console.WriteLine(
+                                $"[PIM] Would move: {movie.OriginalFilePath} -> {movie.TargetPath}");
+                            continue;
+                        }
+
+                        if (!File.Exists(movie.OriginalFilePath))
+                        {
+                            movie.Status = "Source File Missing";
+                            movie.ApprovedForCommit = false;
+                            Console.WriteLine(
+                                $"[PIM] Skipped: source file missing - {movie.OriginalFilePath}");
+                            continue;
+                        }
+
+                        // ApplyConflictDetection has just built a fresh destination
+                        // snapshot. Reuse it here; exact File.Exists checks below
+                        // still protect against a target appearing during commit.
+                        var destinationResult = _destinationConflictService.Check(
+                            movie,
+                            normalizedDestinationRoot,
+                            refresh: false);
+
+                        if (destinationResult.HasConflict)
+                        {
+                            MarkRuntimeDestinationConflict(movie, destinationResult);
+                            Console.WriteLine(
+                                $"[PIM] Conflict: {displayName} - {destinationResult.Message}");
+                            continue;
+                        }
+
+                        var targetDirectory = Path.GetDirectoryName(movie.TargetPath);
+
+                        if (!string.IsNullOrWhiteSpace(targetDirectory))
+                            Directory.CreateDirectory(targetDirectory);
+
+                        if (File.Exists(movie.TargetPath))
+                        {
+                            MarkRuntimeDestinationConflict(
+                                movie,
+                                DestinationConflictResult.Conflict(
+                                    DestinationConflictType.TargetFileAlreadyExists,
+                                    "The exact target file appeared before the move could be completed.",
+                                    movie.TargetPath));
+                            Console.WriteLine(
+                                $"[PIM] Conflict: target appeared before move - {movie.TargetPath}");
+                            continue;
+                        }
+
+                        Console.WriteLine(
+                            $"[PIM] Moving: {movie.OriginalFilePath} -> {movie.TargetPath}");
+
+                        File.Move(
+                            movie.OriginalFilePath,
+                            movie.TargetPath,
+                            overwrite: false);
+
+                        _destinationConflictService.RecordDestinationEntry(movie.TargetPath);
+                        movie.Status = "Committed";
+
+                        Console.WriteLine($"[PIM] Committed: {movie.TargetPath}");
+                    }
+                    catch (IOException ex)
+                    {
+                        if (!string.IsNullOrWhiteSpace(movie.TargetPath) &&
+                            File.Exists(movie.TargetPath))
+                        {
+                            MarkRuntimeDestinationConflict(
+                                movie,
+                                DestinationConflictResult.Conflict(
+                                    DestinationConflictType.TargetFileAlreadyExists,
+                                    "The target file appeared while the move was being performed.",
+                                    movie.TargetPath));
                         }
                         else
                         {
-                            movie.Status = "Not approved for commit";
+                            movie.Status = "Error";
+                            movie.ErrorMessage = ex.Message;
+                            movie.ApprovedForCommit = false;
                         }
 
-                        continue;
+                        Console.WriteLine(
+                            $"[PIM] File operation error for {displayName}: {ex.Message}");
                     }
-
-                    if (string.IsNullOrWhiteSpace(movie.TargetPath))
-                    {
-                        movie.Status = "Missing Target Path";
-                        movie.ApprovedForCommit = false;
-                        continue;
-                    }
-
-                    EnsureTargetIsUnderRoot(
-                        normalizedDestinationRoot,
-                        movie.TargetPath);
-
-                    if (dryRun)
-                    {
-                        movie.Status = "Dry Run Complete";
-                        continue;
-                    }
-
-                    if (!File.Exists(movie.OriginalFilePath))
-                    {
-                        movie.Status = "Source File Missing";
-                        movie.ApprovedForCommit = false;
-                        continue;
-                    }
-
-                    var destinationResult = _destinationConflictService.Check(
-                        movie,
-                        normalizedDestinationRoot,
-                        refresh: true);
-
-                    if (destinationResult.HasConflict)
-                    {
-                        MarkRuntimeDestinationConflict(movie, destinationResult);
-                        continue;
-                    }
-
-                    var targetDirectory = Path.GetDirectoryName(movie.TargetPath);
-
-                    if (!string.IsNullOrWhiteSpace(targetDirectory))
-                        Directory.CreateDirectory(targetDirectory);
-
-                    if (File.Exists(movie.TargetPath))
-                    {
-                        MarkRuntimeDestinationConflict(
-                            movie,
-                            DestinationConflictResult.Conflict(
-                                DestinationConflictType.TargetFileAlreadyExists,
-                                "The exact target file appeared before the move could be completed.",
-                                movie.TargetPath));
-                        continue;
-                    }
-
-                    File.Move(
-                        movie.OriginalFilePath,
-                        movie.TargetPath,
-                        overwrite: false);
-
-                    _destinationConflictService.InvalidateCache();
-                    movie.Status = "Committed";
-                }
-                catch (IOException ex)
-                {
-                    if (!string.IsNullOrWhiteSpace(movie.TargetPath) &&
-                        File.Exists(movie.TargetPath))
-                    {
-                        MarkRuntimeDestinationConflict(
-                            movie,
-                            DestinationConflictResult.Conflict(
-                                DestinationConflictType.TargetFileAlreadyExists,
-                                "The target file appeared while the move was being performed.",
-                                movie.TargetPath));
-                    }
-                    else
+                    catch (Exception ex)
                     {
                         movie.Status = "Error";
                         movie.ErrorMessage = ex.Message;
                         movie.ApprovedForCommit = false;
+
+                        Console.WriteLine(
+                            $"[PIM] Error processing {displayName}: {ex.Message}");
+                    }
+                    finally
+                    {
+                        _progress.Processed++;
                     }
                 }
-                catch (Exception ex)
-                {
-                    movie.Status = "Error";
-                    movie.ErrorMessage = ex.Message;
-                    movie.ApprovedForCommit = false;
-                }
+            }
+            finally
+            {
+                _progress.CurrentFile = string.Empty;
+                _progress.Message = dryRun
+                    ? "Dry run complete."
+                    : "Live commit complete.";
+                _progress.IsRunning = false;
+
+                Console.WriteLine(
+                    $"[PIM] {operationName} finished. " +
+                    $"Processed {_progress.Processed:N0} of {_progress.Total:N0} file(s).");
             }
         }
 
