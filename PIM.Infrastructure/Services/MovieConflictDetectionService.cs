@@ -46,11 +46,18 @@ namespace PIM.Infrastructure.Services
 
         public void ApplyConflictDetection(List<Movie> movies, string outputPath)
         {
+            // Remember prior conflict rows before clearing their transient state.
+            // This allows a commit-time recheck to evaluate the same files again.
+            var previousConflictIds = movies
+                .Where(movie => IsConflictReviewReason(movie.ReviewReason))
+                .Select(movie => movie.Id)
+                .ToHashSet();
+
             ClearConflictState(movies);
             _destinationConflictService.InvalidateCache();
 
             var candidates = movies
-                .Where(IsConflictCandidate)
+                .Where(movie => IsConflictCandidate(movie, previousConflictIds))
                 .ToList();
 
             ApplyIncomingTargetPathCollisions(candidates);
@@ -148,12 +155,32 @@ namespace PIM.Infrastructure.Services
             }
         }
 
-        private static bool IsConflictCandidate(Movie movie)
+        private static bool IsConflictCandidate(
+            Movie movie,
+            HashSet<Guid> previousConflictIds)
         {
-            return !movie.HasError &&
-                   !movie.NeedsReview &&
-                   movie.ApprovedForCommit &&
-                   !string.IsNullOrWhiteSpace(movie.TargetPath);
+            if (movie.HasError || string.IsNullOrWhiteSpace(movie.TargetPath))
+                return false;
+
+            if (movie.ApprovedForCommit)
+                return true;
+
+            // DuplicateService deliberately sends equally ranked copies to review.
+            // They still need proposed-path comparison so PIM can report the more
+            // precise incoming collision instead of only "No clear best file".
+            if (IsAmbiguousDuplicateReview(movie.ReviewReason))
+                return true;
+
+            // Re-evaluate prior conflict rows during dry-run/commit checks.
+            return previousConflictIds.Contains(movie.Id);
+        }
+
+        private static bool IsAmbiguousDuplicateReview(string? reviewReason)
+        {
+            return !string.IsNullOrWhiteSpace(reviewReason) &&
+                   reviewReason.StartsWith(
+                       "No clear best file for ",
+                       StringComparison.OrdinalIgnoreCase);
         }
 
         private static void SetDestinationConflict(
