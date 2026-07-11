@@ -1,12 +1,15 @@
-﻿namespace PIM.Core.Models
+namespace PIM.Core.Models
 {
     public enum DestinationConflictType
     {
         None,
+        InvalidTargetPath,
         TargetFileAlreadyExists,
-        TargetFolderAlreadyExists,
-        SameImdbIdExistsInDestination,
-        SimilarTitleYearExistsInDestination
+        TargetDirectoryBlockedByFile,
+        SameImdbIdAndEditionExistsInDestination,
+        SimilarTitleYearExistsInDestination,
+        IncomingTargetPathCollision,
+        IncomingSameEditionCollision
     }
 
     public sealed class DestinationConflictResult
