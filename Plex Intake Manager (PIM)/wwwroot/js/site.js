@@ -45,6 +45,8 @@
                 ? "Processing Dry Run..."
                 : "Applying Changes...";
 
+            const destinationPath =
+                document.querySelector('input[name="OutputPath"]')?.value ?? "";
             const startedAt = Date.now();
             let polling = true;
             let latestProgress = {
@@ -174,11 +176,19 @@
                 window.clearInterval(elapsedTimer);
                 window.clearInterval(progressTimer);
 
+                const elapsedSeconds = Math.floor(
+                    (Date.now() - startedAt) / 1000);
+                const enhancedHtml = enhanceCompletionPage(
+                    responseHtml,
+                    isDryRun,
+                    destinationPath,
+                    formatTime(elapsedSeconds));
+
                 // The POST redirects to a fully rendered Razor page containing the
                 // TempData result message. Writing that returned page preserves the
                 // message without issuing another GET that would consume it twice.
                 document.open();
-                document.write(responseHtml);
+                document.write(enhancedHtml);
                 document.close();
             } catch (error) {
                 polling = false;
@@ -198,6 +208,75 @@
             }
         });
     });
+
+    function enhanceCompletionPage(
+        responseHtml,
+        isDryRun,
+        destinationPath,
+        elapsed) {
+        const parser = new DOMParser();
+        const completedDocument = parser.parseFromString(responseHtml, "text/html");
+        const resultAlert = Array.from(
+            completedDocument.querySelectorAll(".alert.alert-info"))
+            .find(alert => {
+                const text = alert.textContent ?? "";
+                return text.includes("Dry Run Complete using") ||
+                    text.includes("Changes Applied using");
+            });
+
+        if (!resultAlert) {
+            return responseHtml;
+        }
+
+        const text = (resultAlert.textContent ?? "")
+            .replace(/\s+/g, " ")
+            .trim();
+        const dryRunPattern =
+            /Dry Run Complete using '(.+?)': (\d+) files would be moved, (\d+) duplicates would be skipped, (\d+) need review, (\d+) errors found\./i;
+        const livePattern =
+            /Changes Applied using '(.+?)': (\d+) files processed, (\d+) duplicates skipped, (\d+) need review, (\d+) errors found\./i;
+        const match = text.match(isDryRun ? dryRunPattern : livePattern);
+
+        if (!match) {
+            return responseHtml;
+        }
+
+        const profileName = match[1];
+        const handledCount = Number(match[2]);
+        const duplicateCount = Number(match[3]);
+        const reviewCount = Number(match[4]);
+        const errorCount = Number(match[5]);
+        const alertType = errorCount > 0
+            ? "alert-warning"
+            : isDryRun
+                ? "alert-primary"
+                : "alert-success";
+        const title = isDryRun
+            ? "Dry Run Complete — No files were changed"
+            : "Live Commit Complete";
+        const primaryLabel = isDryRun
+            ? "Would move"
+            : "Approved files processed";
+        const reviewLabel = isDryRun
+            ? "Files requiring review"
+            : "Review items left unchanged";
+
+        resultAlert.className = `alert ${alertType} mt-3`;
+        resultAlert.innerHTML =
+            `<div class="fw-bold fs-5 mb-2">${escapeHtml(title)}</div>` +
+            `<div class="mb-2"><strong>Profile:</strong> ${escapeHtml(profileName)}</div>` +
+            `<div class="row g-2 mb-2">` +
+                `<div class="col-sm-6 col-lg-3"><strong>${primaryLabel}:</strong> ${handledCount}</div>` +
+                `<div class="col-sm-6 col-lg-3"><strong>Duplicates skipped:</strong> ${duplicateCount}</div>` +
+                `<div class="col-sm-6 col-lg-3"><strong>${reviewLabel}:</strong> ${reviewCount}</div>` +
+                `<div class="col-sm-6 col-lg-3"><strong>Errors:</strong> ${errorCount}</div>` +
+            `</div>` +
+            `<div><strong>Destination:</strong> ` +
+                `<span class="text-break">${escapeHtml(destinationPath || "Not available")}</span></div>` +
+            `<div><strong>Total elapsed time:</strong> ${escapeHtml(elapsed)}</div>`;
+
+        return "<!DOCTYPE html>\n" + completedDocument.documentElement.outerHTML;
+    }
 
     function formatTime(totalSeconds) {
         const hours = Math.floor(totalSeconds / 3600);
