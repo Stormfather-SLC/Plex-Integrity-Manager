@@ -9,7 +9,16 @@ namespace PIM.Core.Models
     {
         public int Total { get; set; }
 
+        /// <summary>
+        /// Number of items whose processing has fully completed.
+        /// </summary>
         public int Processed { get; set; }
+
+        /// <summary>
+        /// One-based position of the item currently being processed. A value of
+        /// zero means there is no active item, such as during destination scanning.
+        /// </summary>
+        public int CurrentItem { get; set; }
 
         public string CurrentFile { get; set; } = string.Empty;
 
