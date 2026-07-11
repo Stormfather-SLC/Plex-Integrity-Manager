@@ -10,6 +10,7 @@ namespace PIM.Web.Pages;
 public class DestinationProfilesModel : PageModel
 {
     private const string DryRunPreviewCacheKey = "DryRunPreview";
+    private const string DryRunApprovalCacheKey = "DryRunApproval";
 
     private readonly IDestinationProfileStore _profileStore;
     private readonly IDestinationPathBuilder _pathBuilder;
@@ -44,15 +45,15 @@ public class DestinationProfilesModel : PageModel
 
     public string? PreviewError { get; private set; }
 
-    public List<SelectListItem> LevelTypeOptions { get; } =
-    [
+    public List<SelectListItem> LevelTypeOptions { get; } = new()
+    {
         new("MPA Rating", OrganizationLevelType.MpaRating.ToString()),
         new("Primary Genre", OrganizationLevelType.PrimaryGenre.ToString()),
         new("Library Category", OrganizationLevelType.LibraryCategory.ToString()),
         new("Alphabetical Range", OrganizationLevelType.AlphabeticalRange.ToString()),
         new("Fixed Folder", OrganizationLevelType.FixedFolder.ToString()),
         new("Preserve Source Folders", OrganizationLevelType.PreserveSourceFolders.ToString())
-    ];
+    };
 
     public void OnGet(Guid? id)
     {
@@ -85,7 +86,7 @@ public class DestinationProfilesModel : PageModel
         }
 
         var saved = _profileStore.Save(Profile);
-        _cache.Remove(DryRunPreviewCacheKey);
+        InvalidateDryRunApproval();
 
         TempData["ProfileMessage"] =
             $"'{saved.Name}' was saved. Existing dry-run approval was cleared.";
@@ -117,7 +118,7 @@ public class DestinationProfilesModel : PageModel
             DestinationOrganizationLevel.Create(NewLevelType));
 
         var saved = _profileStore.Save(Profile);
-        _cache.Remove(DryRunPreviewCacheKey);
+        InvalidateDryRunApproval();
         return RedirectToPage(new { id = saved.Id });
     }
 
@@ -129,7 +130,7 @@ public class DestinationProfilesModel : PageModel
             Profile.OrganizationLevels.RemoveAt(index);
 
         var saved = _profileStore.Save(Profile);
-        _cache.Remove(DryRunPreviewCacheKey);
+        InvalidateDryRunApproval();
         return RedirectToPage(new { id = saved.Id });
     }
 
@@ -151,7 +152,7 @@ public class DestinationProfilesModel : PageModel
         }
 
         var saved = _profileStore.Save(Profile);
-        _cache.Remove(DryRunPreviewCacheKey);
+        InvalidateDryRunApproval();
         return RedirectToPage(new { id = saved.Id });
     }
 
@@ -188,20 +189,38 @@ public class DestinationProfilesModel : PageModel
             return RedirectToPage(new { id = profileId });
         }
 
-        _cache.Remove(DryRunPreviewCacheKey);
+        InvalidateDryRunApproval();
         TempData["ProfileMessage"] = "Destination profile deleted.";
         return RedirectToPage();
     }
 
     public IActionResult OnPostUse(Guid profileId)
     {
-        if (!_profileStore.SetActive(profileId))
+        NormalizeBoundProfile();
+
+        if (Profile.Id != profileId)
         {
-            TempData["ProfileMessage"] = "The destination profile could not be selected.";
+            TempData["ProfileMessage"] = "The destination profile selection did not match the editor.";
             return RedirectToPage(new { id = profileId });
         }
 
-        _cache.Remove(DryRunPreviewCacheKey);
+        if (!TryValidateProfile(Profile, out var validationMessage))
+        {
+            TempData["ProfileMessage"] = validationMessage;
+            return RedirectToPage(new { id = Profile.Id });
+        }
+
+        // Save current editor changes before selecting the profile so the scan
+        // always uses exactly what the user sees on this page.
+        var saved = _profileStore.Save(Profile);
+
+        if (!_profileStore.SetActive(saved.Id))
+        {
+            TempData["ProfileMessage"] = "The destination profile could not be selected.";
+            return RedirectToPage(new { id = saved.Id });
+        }
+
+        InvalidateDryRunApproval();
         return RedirectToPage("/Index");
     }
 
@@ -237,7 +256,7 @@ public class DestinationProfilesModel : PageModel
                 Year = 1985,
                 ImdbId = "tt0088794",
                 MpaRating = "PG",
-                Genres = ["Comedy", "Romance"],
+                Genres = new List<string> { "Comedy", "Romance" },
                 PrimaryGenre = "Comedy",
                 OriginalFilePath = Path.Combine(
                     sampleDirectory,
@@ -268,6 +287,12 @@ public class DestinationProfilesModel : PageModel
             level.AlphabeticalBuckets ??= new List<AlphabeticalBucket>();
             level.Normalize();
         }
+    }
+
+    private void InvalidateDryRunApproval()
+    {
+        _cache.Remove(DryRunPreviewCacheKey);
+        _cache.Remove(DryRunApprovalCacheKey);
     }
 
     private static bool TryValidateProfile(
