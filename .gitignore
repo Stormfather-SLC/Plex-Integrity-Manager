@@ -19,3 +19,7 @@ TestResults/
 
 # Local settings
 appsettings.Development.json
+
+# Local destination profile data
+Plex Intake Manager (PIM)/App_Data/destination-profiles.json
+Plex Intake Manager (PIM)/App_Data/destination-profiles.json.*
