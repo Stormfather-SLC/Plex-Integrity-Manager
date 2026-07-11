@@ -47,15 +47,80 @@
 
             const startedAt = Date.now();
             let polling = true;
-
-            workflowStatus.innerHTML =
-                `<strong>${isDryRun ? "Preparing dry run" : "Preparing live commit"}...</strong><br>` +
-                "PIM is checking the destination for conflicts before processing files.";
+            let latestProgress = {
+                total: 0,
+                processed: 0,
+                currentFile: "",
+                isRunning: false
+            };
 
             const progressUrl = new URL(window.location.href);
             progressUrl.searchParams.set("handler", "Progress");
 
-            const renderProgress = async () => {
+            const renderStatus = () => {
+                if (!polling) {
+                    return;
+                }
+
+                const elapsedSeconds = Math.floor(
+                    (Date.now() - startedAt) / 1000);
+                const elapsed = formatTime(elapsedSeconds);
+                const data = latestProgress;
+
+                if (data.isRunning && data.total > 0) {
+                    const processed = Math.max(0, Number(data.processed) || 0);
+                    const total = Math.max(0, Number(data.total) || 0);
+                    const percent = total > 0
+                        ? Math.min(100, Math.floor((processed / total) * 100))
+                        : 0;
+                    const hasCurrentFile = processed < total && data.currentFile;
+
+                    workflowStatus.innerHTML =
+                        `<div><strong>Processed ${processed} of ${total}</strong></div>` +
+                        `<div class="progress mt-1 mb-2" style="height:20px;" ` +
+                            `role="progressbar" aria-label="Overall batch progress" ` +
+                            `aria-valuenow="${percent}" aria-valuemin="0" aria-valuemax="100">` +
+                            `<div class="progress-bar" style="width:${percent}%">${percent}%</div>` +
+                        `</div>` +
+                        (hasCurrentFile
+                            ? `<div><strong>Processing Current File:</strong> ` +
+                                `${escapeHtml(data.currentFile)}</div>` +
+                                `<div class="progress mt-1 mb-2" style="height:12px;" ` +
+                                    `role="progressbar" aria-label="Current file is being processed">` +
+                                    `<div class="progress-bar progress-bar-striped progress-bar-animated" ` +
+                                        `style="width:100%"></div>` +
+                                `</div>`
+                            : `<div><strong>Finalizing results...</strong></div>`) +
+                        `<div>Elapsed: ${elapsed}</div>`;
+                    return;
+                }
+
+                if (data.isRunning) {
+                    workflowStatus.innerHTML =
+                        "<strong>Scanning destination for conflicts...</strong><br>" +
+                        `Entries Checked: ${Number(data.processed) || 0}<br>` +
+                        `Current Location: ${escapeHtml(data.currentFile || "Starting...")}<br>` +
+                        `<div class="progress mt-1 mb-2" style="height:12px;" ` +
+                            `role="progressbar" aria-label="Destination scan is running">` +
+                            `<div class="progress-bar progress-bar-striped progress-bar-animated" ` +
+                                `style="width:100%"></div>` +
+                        `</div>` +
+                        `Elapsed: ${elapsed}`;
+                    return;
+                }
+
+                workflowStatus.innerHTML =
+                    `<strong>${isDryRun ? "Preparing dry run" : "Preparing live commit"}...</strong><br>` +
+                    "PIM is checking the destination and preparing the approved plan.<br>" +
+                    `<div class="progress mt-1 mb-2" style="height:12px;" ` +
+                        `role="progressbar" aria-label="PIM is preparing the operation">` +
+                        `<div class="progress-bar progress-bar-striped progress-bar-animated" ` +
+                            `style="width:100%"></div>` +
+                    `</div>` +
+                    `Elapsed: ${elapsed}`;
+            };
+
+            const pollProgress = async () => {
                 if (!polling) {
                     return;
                 }
@@ -71,37 +136,22 @@
                         return;
                     }
 
-                    const data = await response.json();
-                    const elapsedSeconds = Math.floor(
-                        (Date.now() - startedAt) / 1000);
-                    const elapsed = formatTime(elapsedSeconds);
-
-                    if (data.isRunning) {
-                        if (data.total > 0) {
-                            workflowStatus.innerHTML =
-                                `<strong>Processing ${data.processed} of ${data.total}</strong><br>` +
-                                `Current File: ${escapeHtml(data.currentFile || "Starting...")}<br>` +
-                                `Elapsed: ${elapsed}`;
-                        } else {
-                            workflowStatus.innerHTML =
-                                "<strong>Scanning destination for conflicts...</strong><br>" +
-                                `Entries Checked: ${data.processed}<br>` +
-                                `Current Location: ${escapeHtml(data.currentFile || "Starting...")}<br>` +
-                                `Elapsed: ${elapsed}`;
-                        }
-                    } else {
-                        workflowStatus.innerHTML =
-                            `<strong>${isDryRun ? "Dry run" : "Live commit"} request is active...</strong><br>` +
-                            "Waiting for the next processing phase.<br>" +
-                            `Elapsed: ${elapsed}`;
-                    }
+                    latestProgress = await response.json();
+                    renderStatus();
                 } catch (error) {
-                    console.debug("PIM progress polling is temporarily unavailable.", error);
+                    console.debug(
+                        "PIM progress polling is temporarily unavailable.",
+                        error);
                 }
             };
 
-            await renderProgress();
-            const progressTimer = window.setInterval(renderProgress, 750);
+            renderStatus();
+
+            // Keep the elapsed clock smooth even when a progress request is delayed
+            // by file-system or network activity. Server state is polled separately.
+            const elapsedTimer = window.setInterval(renderStatus, 250);
+            const progressTimer = window.setInterval(pollProgress, 750);
+            await pollProgress();
 
             try {
                 const response = await fetch(commitForm.action, {
@@ -121,6 +171,7 @@
                 }
 
                 polling = false;
+                window.clearInterval(elapsedTimer);
                 window.clearInterval(progressTimer);
 
                 // The POST redirects to a fully rendered Razor page containing the
@@ -131,6 +182,7 @@
                 document.close();
             } catch (error) {
                 polling = false;
+                window.clearInterval(elapsedTimer);
                 window.clearInterval(progressTimer);
 
                 workflowStatus.innerHTML =
@@ -138,7 +190,6 @@
                     escapeHtml(error instanceof Error
                         ? error.message
                         : "An unexpected browser error occurred.");
-
                 applyButton.disabled = false;
                 applyButton.innerHTML = originalButtonText;
                 commitForm.dataset.pimSubmitting = "false";
