@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using PIM.Core.Interfaces;
@@ -12,8 +13,11 @@ namespace PIM.Web.Services;
 /// </summary>
 public sealed class DestinationProfileStore : IDestinationProfileStore
 {
+    private const int SaveRetryCount = 5;
+
     private readonly object _syncRoot = new();
     private readonly string _filePath;
+    private readonly string _legacyFilePath;
     private readonly IConfiguration _configuration;
     private readonly JsonSerializerOptions _jsonOptions;
 
@@ -23,7 +27,30 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
     {
         _configuration = configuration;
 
-        var dataDirectory = Path.Combine(environment.ContentRootPath, "App_Data");
+        var legacyDataDirectory = Path.Combine(
+            environment.ContentRootPath,
+            "App_Data");
+
+        _legacyFilePath = Path.Combine(
+            legacyDataDirectory,
+            "destination-profiles.json");
+
+        var configuredDataDirectory =
+            configuration["PIM:ProfileDataDirectory"];
+
+        var localApplicationData = Environment.GetFolderPath(
+            Environment.SpecialFolder.LocalApplicationData);
+
+        var dataDirectory = !string.IsNullOrWhiteSpace(configuredDataDirectory)
+            ? Path.GetFullPath(
+                Environment.ExpandEnvironmentVariables(
+                    configuredDataDirectory.Trim()))
+            : !string.IsNullOrWhiteSpace(localApplicationData)
+                ? Path.Combine(
+                    localApplicationData,
+                    "Plex Integrity Manager")
+                : legacyDataDirectory;
+
         Directory.CreateDirectory(dataDirectory);
         _filePath = Path.Combine(dataDirectory, "destination-profiles.json");
 
@@ -33,6 +60,8 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
             PropertyNameCaseInsensitive = true
         };
         _jsonOptions.Converters.Add(new JsonStringEnumConverter());
+
+        TryMigrateLegacyProfiles();
     }
 
     public IReadOnlyList<DestinationProfile> GetProfiles()
@@ -189,7 +218,8 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
         catch (Exception ex) when (
             ex is JsonException or IOException or InvalidDataException)
         {
-            var backupPath = $"{_filePath}.corrupt-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            var backupPath =
+                $"{_filePath}.corrupt-{DateTime.UtcNow:yyyyMMddHHmmss}";
 
             try
             {
@@ -214,16 +244,200 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
         document.Profiles ??= new List<DestinationProfile>();
 
         if (document.Profiles.Count == 0)
-            throw new InvalidOperationException("At least one destination profile is required.");
+            throw new InvalidOperationException(
+                "At least one destination profile is required.");
 
         foreach (var profile in document.Profiles)
             profile.Normalize();
 
         var json = JsonSerializer.Serialize(document, _jsonOptions);
-        var temporaryPath = $"{_filePath}.tmp";
+        var directory = Path.GetDirectoryName(_filePath)
+                        ?? throw new InvalidOperationException(
+                            "The destination profile storage folder is invalid.");
 
-        File.WriteAllText(temporaryPath, json);
-        File.Move(temporaryPath, _filePath, overwrite: true);
+        Directory.CreateDirectory(directory);
+
+        var temporaryPath = Path.Combine(
+            directory,
+            $"destination-profiles.{Guid.NewGuid():N}.tmp");
+
+        var backupPath = Path.Combine(
+            directory,
+            $"destination-profiles.{Guid.NewGuid():N}.bak");
+
+        try
+        {
+            using (var stream = new FileStream(
+                       temporaryPath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None))
+            using (var writer = new StreamWriter(
+                       stream,
+                       new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            {
+                writer.Write(json);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            ReplaceProfileFileWithRetry(temporaryPath, backupPath);
+        }
+        finally
+        {
+            TryDeleteFile(temporaryPath);
+            TryDeleteFile(backupPath);
+        }
+    }
+
+    private void ReplaceProfileFileWithRetry(
+        string temporaryPath,
+        string backupPath)
+    {
+        Exception? lastException = null;
+
+        for (var attempt = 1; attempt <= SaveRetryCount; attempt++)
+        {
+            try
+            {
+                TryDeleteFile(backupPath);
+
+                if (File.Exists(_filePath))
+                {
+                    ClearReadOnlyAttribute(_filePath);
+                    File.Replace(
+                        temporaryPath,
+                        _filePath,
+                        backupPath,
+                        ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(temporaryPath, _filePath);
+                }
+
+                return;
+            }
+            catch (PlatformNotSupportedException)
+            {
+                WriteProfileFileDirectly(temporaryPath);
+                return;
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException)
+            {
+                lastException = ex;
+
+                if (attempt < SaveRetryCount)
+                    Thread.Sleep(75 * attempt);
+            }
+        }
+
+        try
+        {
+            // Some synchronization providers temporarily reject replace/rename
+            // operations while still allowing the existing file to be rewritten.
+            WriteProfileFileDirectly(temporaryPath);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException(
+                $"PIM could not save destination profiles to '{_filePath}'. " +
+                "The file may be read-only or temporarily locked by another program.",
+                lastException ?? ex);
+        }
+    }
+
+    private void WriteProfileFileDirectly(string temporaryPath)
+    {
+        if (File.Exists(_filePath))
+            ClearReadOnlyAttribute(_filePath);
+
+        using var source = new FileStream(
+            temporaryPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+
+        using var destination = new FileStream(
+            _filePath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.Read);
+
+        source.CopyTo(destination);
+        destination.Flush(flushToDisk: true);
+    }
+
+    private void TryMigrateLegacyProfiles()
+    {
+        if (PathsEqual(_legacyFilePath, _filePath) ||
+            File.Exists(_filePath) ||
+            !File.Exists(_legacyFilePath))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Copy(_legacyFilePath, _filePath, overwrite: false);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException)
+        {
+            // Migration is best-effort. If the Dropbox/project copy is locked,
+            // PIM creates safe defaults in LocalApplicationData instead.
+        }
+    }
+
+    private static void ClearReadOnlyAttribute(string path)
+    {
+        if (!File.Exists(path))
+            return;
+
+        var attributes = File.GetAttributes(path);
+
+        if ((attributes & FileAttributes.ReadOnly) != 0)
+        {
+            File.SetAttributes(
+                path,
+                attributes & ~FileAttributes.ReadOnly);
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // Temporary cleanup must not hide the original save result.
+        }
+    }
+
+    private static bool PathsEqual(string firstPath, string secondPath)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(firstPath)
+                    .TrimEnd(
+                        Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(secondPath)
+                    .TrimEnd(
+                        Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private DestinationProfileDocument CreateDefaultDocument()
