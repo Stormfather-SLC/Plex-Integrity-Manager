@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Configuration;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 
@@ -16,14 +15,11 @@ namespace PIM.Infrastructure.Services
     public class RenameService : IRenameService
     {
         private readonly IDestinationConflictService _destinationConflictService;
-        private readonly IConfiguration _configuration;
 
         public RenameService(
-            IDestinationConflictService destinationConflictService,
-            IConfiguration configuration)
+            IDestinationConflictService destinationConflictService)
         {
             _destinationConflictService = destinationConflictService;
-            _configuration = configuration;
         }
 
         /// <summary>
@@ -147,6 +143,9 @@ namespace PIM.Infrastructure.Services
                         continue;
                     }
 
+                    // Derive the root from the actual proposed TargetPath rather
+                    // than configuration, so the final check always protects the
+                    // exact location where this file is about to be moved.
                     var outputPath = ResolveOutputPath(movie.TargetPath);
 
                     var destinationResult = _destinationConflictService.Check(
@@ -217,14 +216,9 @@ namespace PIM.Infrastructure.Services
             }
         }
 
-        private string ResolveOutputPath(string targetPath)
+        private static string ResolveOutputPath(string targetPath)
         {
-            var configuredOutputPath = _configuration["PIM:OutputPath"];
-
-            if (!string.IsNullOrWhiteSpace(configuredOutputPath))
-                return configuredOutputPath;
-
-            var movieFolder = Path.GetDirectoryName(targetPath);
+            var movieFolder = Path.GetDirectoryName(Path.GetFullPath(targetPath));
 
             if (string.IsNullOrWhiteSpace(movieFolder))
                 return string.Empty;
