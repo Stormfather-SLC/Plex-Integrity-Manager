@@ -5,6 +5,8 @@
     "use strict";
 
     document.addEventListener("DOMContentLoaded", function () {
+        initializeSourceCleanupSetting();
+
         const applyButton = Array.from(
             document.querySelectorAll('button[type="submit"]'))
             .find(button => button.textContent.includes("Apply Changes"));
@@ -26,6 +28,8 @@
             const dryRunCheckbox = commitForm.querySelector(
                 'input[name="DryRun"][type="checkbox"]');
             const isDryRun = dryRunCheckbox?.checked !== false;
+            const cleanupEnabled =
+                document.getElementById("removeEmptySourceFolders")?.checked !== false;
 
             if (!isDryRun) {
                 const confirmed = window.confirm(
@@ -176,13 +180,18 @@
                 window.clearInterval(elapsedTimer);
                 window.clearInterval(progressTimer);
 
+                const cleanupStatus = isDryRun
+                    ? null
+                    : await fetchSourceCleanupStatus();
                 const elapsedSeconds = Math.floor(
                     (Date.now() - startedAt) / 1000);
                 const enhancedHtml = enhanceCompletionPage(
                     responseHtml,
                     isDryRun,
                     destinationPath,
-                    formatTime(elapsedSeconds));
+                    formatTime(elapsedSeconds),
+                    cleanupEnabled,
+                    cleanupStatus);
 
                 // The POST redirects to a fully rendered Razor page containing the
                 // TempData result message. Writing that returned page preserves the
@@ -209,11 +218,115 @@
         });
     });
 
+    async function initializeSourceCleanupSetting() {
+        const settingsForm =
+            document.querySelector('input[name="ScanPath"]')?.closest("form");
+        const saveButton = settingsForm?.querySelector('button[type="submit"]');
+
+        if (!settingsForm || !saveButton ||
+            document.getElementById("removeEmptySourceFolders")) {
+            return;
+        }
+
+        const settingContainer = document.createElement("div");
+        settingContainer.className = "form-check mb-3";
+        settingContainer.innerHTML =
+            `<input class="form-check-input" type="checkbox" ` +
+                `id="removeEmptySourceFolders" checked>` +
+            `<label class="form-check-label" for="removeEmptySourceFolders">` +
+                `Remove empty source folders after a successful live commit` +
+            `</label>` +
+            `<div class="form-text">` +
+                `Only folders emptied by committed moves are considered. ` +
+                `Folders containing subtitles, artwork, metadata, hidden files, ` +
+                `review items, or remaining subfolders are preserved.` +
+            `</div>` +
+            `<div id="sourceCleanupSettingStatus" class="form-text"></div>`;
+
+        saveButton.parentNode.insertBefore(settingContainer, saveButton);
+
+        const checkbox = document.getElementById("removeEmptySourceFolders");
+        const status = document.getElementById("sourceCleanupSettingStatus");
+
+        try {
+            const response = await fetch("/api/settings/source-cleanup", {
+                method: "GET",
+                cache: "no-store",
+                credentials: "same-origin"
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const setting = await response.json();
+            checkbox.checked = setting.enabled !== false;
+        } catch (error) {
+            status.textContent =
+                "Using the default setting (enabled); the saved value could not be read.";
+            console.debug("PIM source cleanup setting could not be loaded.", error);
+        }
+
+        checkbox.addEventListener("change", async function () {
+            const requestedValue = checkbox.checked;
+            checkbox.disabled = true;
+            status.textContent = "Saving cleanup setting...";
+
+            try {
+                const response = await fetch("/api/settings/source-cleanup", {
+                    method: "POST",
+                    cache: "no-store",
+                    credentials: "same-origin",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ enabled: requestedValue })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const result = await response.json();
+                checkbox.checked = result.enabled !== false;
+                status.textContent = result.message ?? "Cleanup setting saved.";
+            } catch (error) {
+                checkbox.checked = !requestedValue;
+                status.textContent =
+                    "The cleanup setting could not be saved. The previous value remains active.";
+                console.error("PIM source cleanup setting could not be saved.", error);
+            } finally {
+                checkbox.disabled = false;
+            }
+        });
+    }
+
+    async function fetchSourceCleanupStatus() {
+        try {
+            const response = await fetch("/api/status/source-cleanup", {
+                method: "GET",
+                cache: "no-store",
+                credentials: "same-origin"
+            });
+
+            if (!response.ok) {
+                return null;
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.debug("PIM source cleanup status could not be read.", error);
+            return null;
+        }
+    }
+
     function enhanceCompletionPage(
         responseHtml,
         isDryRun,
         destinationPath,
-        elapsed) {
+        elapsed,
+        cleanupEnabled,
+        cleanupStatus) {
         const parser = new DOMParser();
         const completedDocument = parser.parseFromString(responseHtml, "text/html");
         const resultAlert = Array.from(
@@ -246,7 +359,8 @@
         const duplicateCount = Number(match[3]);
         const reviewCount = Number(match[4]);
         const errorCount = Number(match[5]);
-        const alertType = errorCount > 0
+        const cleanupWarningCount = Number(cleanupStatus?.warningCount) || 0;
+        const alertType = errorCount > 0 || cleanupWarningCount > 0
             ? "alert-warning"
             : isDryRun
                 ? "alert-primary"
@@ -261,6 +375,27 @@
             ? "Files requiring review"
             : "Review items left unchanged";
 
+        let cleanupHtml = "";
+
+        if (!isDryRun) {
+            const wasEnabled = cleanupStatus?.enabled ?? cleanupEnabled;
+
+            if (!wasEnabled) {
+                cleanupHtml =
+                    `<div><strong>Source-folder cleanup:</strong> Disabled</div>`;
+            } else if (cleanupStatus?.attempted) {
+                cleanupHtml =
+                    `<div><strong>Empty source folders removed:</strong> ` +
+                        `${Number(cleanupStatus.emptyFoldersRemoved) || 0}</div>` +
+                    `<div><strong>Source cleanup warnings:</strong> ` +
+                        `${cleanupWarningCount}</div>`;
+            } else {
+                cleanupHtml =
+                    `<div><strong>Source-folder cleanup:</strong> ` +
+                        `Enabled, but no cleanup result was available.</div>`;
+            }
+        }
+
         resultAlert.className = `alert ${alertType} mt-3`;
         resultAlert.innerHTML =
             `<div class="fw-bold fs-5 mb-2">${escapeHtml(title)}</div>` +
@@ -271,6 +406,7 @@
                 `<div class="col-sm-6 col-lg-3"><strong>${reviewLabel}:</strong> ${reviewCount}</div>` +
                 `<div class="col-sm-6 col-lg-3"><strong>Errors:</strong> ${errorCount}</div>` +
             `</div>` +
+            cleanupHtml +
             `<div><strong>Destination:</strong> ` +
                 `<span class="text-break">${escapeHtml(destinationPath || "Not available")}</span></div>` +
             `<div><strong>Total elapsed time:</strong> ${escapeHtml(elapsed)}</div>`;
