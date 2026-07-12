@@ -178,12 +178,9 @@ namespace PIM.Web.Pages
                 return RedirectToPage();
             }
 
-            // Every newly scanned movie is enriched, including files that already
-            // contain an IMDb ID. Rating and genre are required by organization
-            // profiles and are not present in the filename alone.
-            var moviesToEnrich = movies
-                .Where(movie => !movie.MetadataFetched)
-                .ToList();
+            // Reuse completed metadata, but refresh stale cached records when the
+            // active profile needs a field that was not captured previously.
+            var moviesToEnrich = GetMoviesRequiringMetadata(movies, profile);
 
             if (moviesToEnrich.Count > 0)
                 await EnrichMoviesAsync(moviesToEnrich);
@@ -204,7 +201,7 @@ namespace PIM.Web.Pages
             });
         }
 
-        public IActionResult OnPostCommit()
+        public async Task<IActionResult> OnPostCommitAsync()
         {
             if (!TryGetCachedMovies(out var movies))
             {
@@ -222,9 +219,22 @@ namespace PIM.Web.Pages
                 return RedirectToPage();
             }
 
+            // A dry run may fill only metadata that is still missing. If Identify
+            // Movies just completed, this list is empty and no OMDb calls are made.
+            // Live commit never refreshes metadata because it must use the exact plan
+            // approved by the preceding dry run.
+            if (DryRun)
+            {
+                var moviesToEnrich = GetMoviesRequiringMetadata(movies, profile);
+
+                if (moviesToEnrich.Count > 0)
+                    await EnrichMoviesAsync(moviesToEnrich);
+            }
+
             // Rebuild the exact current plan immediately before either a dry run
             // or a live commit. This catches profile edits and destination changes.
             _conflictDetection.ClearConflictState(movies);
+            _duplicates.Process(movies);
             _rename.GeneratePreview(movies, profile, sourceRoot);
             _conflictDetection.ApplyConflictDetection(
                 movies,
@@ -491,6 +501,26 @@ namespace PIM.Web.Pages
                 TimeSpan.FromMinutes(CacheDurationMinutes));
         }
 
+        private static List<Movie> GetMoviesRequiringMetadata(
+            IEnumerable<Movie> movies,
+            DestinationProfile profile)
+        {
+            var profileUsesRating = profile.OrganizationLevels.Any(level =>
+                level.Type == OrganizationLevelType.MpaRating);
+            var profileUsesGenre = profile.OrganizationLevels.Any(level =>
+                level.Type == OrganizationLevelType.PrimaryGenre);
+
+            return movies
+                .Where(movie =>
+                    !movie.MetadataFetched ||
+                    (!string.IsNullOrWhiteSpace(movie.ImdbId) &&
+                     (string.IsNullOrWhiteSpace(movie.Title) ||
+                      !movie.Year.HasValue ||
+                      (profileUsesRating && string.IsNullOrWhiteSpace(movie.MpaRating)) ||
+                      (profileUsesGenre && string.IsNullOrWhiteSpace(movie.PrimaryGenre)))))
+                .ToList();
+        }
+
         private async Task EnrichMoviesAsync(List<Movie> moviesToEnrich)
         {
             _progress.Total = moviesToEnrich.Count;
@@ -517,7 +547,11 @@ namespace PIM.Web.Pages
                         movie.NeedsReview = true;
                         movie.Status = "Metadata Not Found";
                     }
-                    else if (!movie.NeedsReview)
+                    else if (!movie.NeedsReview &&
+                             !string.Equals(
+                                 movie.Status,
+                                 "IMDb ID Match",
+                                 StringComparison.Ordinal))
                     {
                         movie.Status = "Metadata Enriched";
                     }
