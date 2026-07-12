@@ -85,7 +85,7 @@
                             `<div class="progress-bar" style="width:${percent}%">${percent}%</div>` +
                         `</div>` +
                         (hasCurrentFile
-                            ? `<div><strong>Processing Current File:</strong> ` +
+                            ? `<div><strong>Currently Processing:</strong> ` +
                                 `${escapeHtml(data.currentFile)}</div>` +
                                 `<div class="progress mt-1 mb-2" style="height:12px;" ` +
                                     `role="progressbar" aria-label="Current file is being processed">` +
