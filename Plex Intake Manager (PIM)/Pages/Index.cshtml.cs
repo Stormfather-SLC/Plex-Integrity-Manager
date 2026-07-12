@@ -305,11 +305,19 @@ namespace PIM.Web.Pages
 
         public IActionResult OnPostSaveSettings()
         {
+            string? temporaryPath = null;
+
             try
             {
-                var appSettingsPath = Path.Combine(
-                    Directory.GetCurrentDirectory(),
-                    "appsettings.json");
+                var previousScanPath = _config["PIM:ScanPath"] ?? string.Empty;
+                ScanPath = ScanPath.Trim();
+                OutputPath = OutputPath.Trim();
+
+                if (string.IsNullOrWhiteSpace(ScanPath))
+                    throw new InvalidOperationException("A source folder is required.");
+
+                if (string.IsNullOrWhiteSpace(OutputPath))
+                    throw new InvalidOperationException("A destination folder is required.");
 
                 var delayMs = _config.GetValue<int>(
                     "PIM:MetadataDelayMs",
@@ -317,39 +325,75 @@ namespace PIM.Web.Pages
 
                 var updatedSettings = new Dictionary<string, object?>
                 {
-                    ["Logging"] = new Dictionary<string, object?>
-                    {
-                        ["LogLevel"] = new Dictionary<string, string>
-                        {
-                            ["Default"] = "Information",
-                            ["Microsoft.AspNetCore"] = "Warning"
-                        }
-                    },
                     ["PIM"] = new Dictionary<string, object?>
                     {
                         ["ScanPath"] = ScanPath,
                         ["OutputPath"] = OutputPath,
                         ["MetadataDelayMs"] = delayMs
-                    },
-                    ["AllowedHosts"] = "*"
+                    }
                 };
 
                 var json = JsonSerializer.Serialize(
                     updatedSettings,
                     new JsonSerializerOptions { WriteIndented = true });
 
-                System.IO.File.WriteAllText(appSettingsPath, json);
+                var settingsDirectory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "Plex Integrity Manager");
+                Directory.CreateDirectory(settingsDirectory);
+
+                var settingsPath = Path.Combine(
+                    settingsDirectory,
+                    "library-settings.json");
+                temporaryPath = settingsPath + ".tmp";
+
+                System.IO.File.WriteAllText(temporaryPath, json);
+                System.IO.File.Move(
+                    temporaryPath,
+                    settingsPath,
+                    overwrite: true);
+                temporaryPath = null;
+
+                // Make the new values available immediately. The JSON provider also
+                // reloads them for future requests and future application launches.
+                _config["PIM:ScanPath"] = ScanPath;
+                _config["PIM:OutputPath"] = OutputPath;
 
                 var profile = _profileStore.GetActiveProfile();
                 profile.DestinationRoot = OutputPath;
                 _profileStore.Save(profile);
 
+                var sourceChanged = !string.Equals(
+                    previousScanPath.Trim(),
+                    ScanPath,
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (sourceChanged)
+                {
+                    _cache.Remove(MovieScanCacheKey);
+                    ResetProgress();
+                }
+
                 InvalidateDryRunApproval();
-                TempData["Message"] =
-                    "Library settings and the active destination profile were saved.";
+                TempData["Message"] = sourceChanged
+                    ? "Library settings were saved. The previous scan was cleared because the source folder changed."
+                    : "Library settings and the active destination profile were saved.";
             }
             catch (Exception ex)
             {
+                if (!string.IsNullOrWhiteSpace(temporaryPath) &&
+                    System.IO.File.Exists(temporaryPath))
+                {
+                    try
+                    {
+                        System.IO.File.Delete(temporaryPath);
+                    }
+                    catch
+                    {
+                        // Preserve the original settings error.
+                    }
+                }
+
                 TempData["Message"] = $"Error saving settings: {ex.Message}";
             }
 
