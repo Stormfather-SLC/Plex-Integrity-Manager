@@ -238,8 +238,10 @@
             `</label>` +
             `<div class="form-text">` +
                 `Only folders emptied by committed moves are considered. ` +
+                `Immediate organization folders directly under the source root ` +
+                `(such as G, PG, PG-13, R, genre, or alphabet folders) are always preserved. ` +
                 `Folders containing subtitles, artwork, metadata, hidden files, ` +
-                `review items, or remaining subfolders are preserved.` +
+                `review items, or remaining subfolders are also preserved.` +
             `</div>` +
             `<div id="sourceCleanupSettingStatus" class="form-text"></div>`;
 
@@ -359,8 +361,9 @@
         const duplicateCount = Number(match[3]);
         const reviewCount = Number(match[4]);
         const errorCount = Number(match[5]);
-        const cleanupWarningCount = Number(cleanupStatus?.warningCount) || 0;
-        const alertType = errorCount > 0 || cleanupWarningCount > 0
+        const cleanupFailureCount = Number(
+            cleanupStatus?.failedFolderCount ?? cleanupStatus?.warningCount) || 0;
+        const alertType = errorCount > 0 || cleanupFailureCount > 0
             ? "alert-warning"
             : isDryRun
                 ? "alert-primary"
@@ -385,10 +388,15 @@
                     `<div><strong>Source-folder cleanup:</strong> Disabled</div>`;
             } else if (cleanupStatus?.attempted) {
                 cleanupHtml =
-                    `<div><strong>Empty source folders removed:</strong> ` +
+                    `<div class="mt-2"><strong>Source-folder cleanup</strong></div>` +
+                    `<div><strong>Empty folders removed:</strong> ` +
                         `${Number(cleanupStatus.emptyFoldersRemoved) || 0}</div>` +
-                    `<div><strong>Source cleanup warnings:</strong> ` +
-                        `${cleanupWarningCount}</div>`;
+                    `<div><strong>Protected folders preserved:</strong> ` +
+                        `${Number(cleanupStatus.protectedFoldersPreserved) || 0}</div>` +
+                    `<div><strong>Non-empty folders preserved:</strong> ` +
+                        `${Number(cleanupStatus.nonEmptyFoldersPreserved) || 0}</div>` +
+                    `<div><strong>Cleanup failures:</strong> ` +
+                        `${cleanupFailureCount}</div>`;
             } else {
                 cleanupHtml =
                     `<div><strong>Source-folder cleanup:</strong> ` +
