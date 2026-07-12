@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.FileProviders;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
@@ -15,11 +16,16 @@ var userSettingsDirectory = Path.Combine(
 Directory.CreateDirectory(userSettingsDirectory);
 
 // Mutable library settings belong outside the source-controlled project.
-// Loading this provider last lets the user's saved source path override the
-// development default in appsettings.json without editing tracked files.
+// Loading these providers last lets the user's saved settings override the
+// development defaults in appsettings.json without editing tracked files.
 builder.Configuration.AddJsonFile(
     new PhysicalFileProvider(userSettingsDirectory),
     "library-settings.json",
+    optional: true,
+    reloadOnChange: true);
+builder.Configuration.AddJsonFile(
+    new PhysicalFileProvider(userSettingsDirectory),
+    "cleanup-settings.json",
     optional: true,
     reloadOnChange: true);
 
@@ -38,6 +44,7 @@ builder.Services.AddScoped<IRenameService, RenameService>();
 
 builder.Services.AddSingleton<IDestinationProfileStore, DestinationProfileStore>();
 builder.Services.AddSingleton<ScanProgress>();
+builder.Services.AddSingleton<SourceCleanupStatus>();
 builder.Services.AddScoped<PreviewTreeService>();
 builder.Services.AddScoped<IDryRunPreviewService, DryRunPreviewService>();
 
@@ -55,4 +62,77 @@ app.UseRouting();
 app.UseAuthorization();
 app.MapRazorPages();
 
+app.MapGet(
+    "/api/settings/source-cleanup",
+    (IConfiguration configuration) => Results.Json(new
+    {
+        enabled = configuration.GetValue(
+            "PIM:RemoveEmptySourceFolders",
+            true)
+    }));
+
+app.MapPost(
+    "/api/settings/source-cleanup",
+    async (
+        SourceCleanupSettingRequest request,
+        IConfiguration configuration) =>
+    {
+        var settingsPath = Path.Combine(
+            userSettingsDirectory,
+            "cleanup-settings.json");
+        var temporaryPath = settingsPath + ".tmp";
+
+        try
+        {
+            var json = JsonSerializer.Serialize(
+                new
+                {
+                    PIM = new
+                    {
+                        RemoveEmptySourceFolders = request.Enabled
+                    }
+                },
+                new JsonSerializerOptions { WriteIndented = true });
+
+            await File.WriteAllTextAsync(temporaryPath, json);
+            File.Move(temporaryPath, settingsPath, overwrite: true);
+
+            // Apply the setting immediately. The JSON provider also reloads it
+            // for future requests and future application launches.
+            configuration["PIM:RemoveEmptySourceFolders"] =
+                request.Enabled.ToString();
+
+            return Results.Json(new
+            {
+                enabled = request.Enabled,
+                message = request.Enabled
+                    ? "Empty source folder cleanup is enabled."
+                    : "Empty source folder cleanup is disabled."
+            });
+        }
+        catch (Exception ex)
+        {
+            if (File.Exists(temporaryPath))
+            {
+                try
+                {
+                    File.Delete(temporaryPath);
+                }
+                catch
+                {
+                    // Preserve the original settings error.
+                }
+            }
+
+            return Results.Problem(
+                $"The source cleanup setting could not be saved: {ex.Message}");
+        }
+    });
+
+app.MapGet(
+    "/api/status/source-cleanup",
+    (SourceCleanupStatus status) => Results.Json(status.Snapshot()));
+
 app.Run();
+
+internal sealed record SourceCleanupSettingRequest(bool Enabled);
