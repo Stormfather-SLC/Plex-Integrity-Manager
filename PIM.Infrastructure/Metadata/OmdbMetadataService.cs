@@ -35,13 +35,14 @@ namespace PIM.Infrastructure.Metadata
         {
             var parsedTitle = movie.Title;
             var parsedYear = movie.Year;
-            var hasImdbId = !string.IsNullOrWhiteSpace(movie.ImdbId);
+            var originalImdbId = movie.ImdbId;
+            var hasImdbId = !string.IsNullOrWhiteSpace(originalImdbId);
 
             if (!hasImdbId && string.IsNullOrWhiteSpace(parsedTitle))
                 return;
 
             var url = hasImdbId
-                ? $"https://www.omdbapi.com/?i={Uri.EscapeDataString(movie.ImdbId!)}"
+                ? $"https://www.omdbapi.com/?i={Uri.EscapeDataString(originalImdbId!)}"
                 : $"https://www.omdbapi.com/?t={Uri.EscapeDataString(parsedTitle!)}";
 
             if (!hasImdbId && parsedYear.HasValue)
@@ -50,12 +51,32 @@ namespace PIM.Infrastructure.Metadata
             url += $"&type=movie&apikey={_apiKey}";
 
             Console.WriteLine(hasImdbId
-                ? $"OMDb Lookup by IMDb ID: IMDb='{movie.ImdbId}', ParsedTitle='{parsedTitle}', ParsedYear='{parsedYear}'"
+                ? $"OMDb Lookup by IMDb ID: IMDb='{originalImdbId}', ParsedTitle='{parsedTitle}', ParsedYear='{parsedYear}'"
                 : $"OMDb Lookup by Title: Title='{parsedTitle}', Year='{parsedYear}'");
 
-            var response = await _httpClient.GetAsync(url);
-            if (!response.IsSuccessStatusCode)
+            HttpResponseMessage response;
+
+            try
+            {
+                response = await _httpClient.GetAsync(url);
+            }
+            catch (Exception ex) when (
+                ex is HttpRequestException ||
+                ex is TaskCanceledException)
+            {
+                if (hasImdbId)
+                    MarkImdbLookupFailure(movie);
+
                 return;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                if (hasImdbId)
+                    MarkImdbLookupFailure(movie);
+
+                return;
+            }
 
             var json = await response.Content.ReadAsStringAsync();
             var data = JsonSerializer.Deserialize<OmdbResponse>(json);
@@ -63,54 +84,80 @@ namespace PIM.Infrastructure.Metadata
             if (data == null || data.Response == "False")
             {
                 if (hasImdbId)
-                {
-                    movie.NeedsReview = true;
-                    movie.ReviewReason = "IMDb ID found, but OMDb lookup failed";
-                    movie.MatchConfidence = 0;
-                    movie.Status = "IMDb ID Lookup Failed";
-                }
+                    MarkImdbLookupFailure(movie);
 
                 return;
             }
 
             var metadataYear = ParseYear(data.Year);
+            var metadataTitle = NormalizeMetadataValue(data.Title);
+            var returnedImdbId = NormalizeMetadataValue(data.ImdbID);
 
-            movie.SuggestedTitle = data.Title;
+            movie.SuggestedTitle = metadataTitle;
             movie.MatchConfidence = CalculateConfidence(
                 parsedTitle,
                 parsedYear,
-                data.Title,
+                metadataTitle ?? string.Empty,
                 metadataYear,
                 hasImdbId);
-
             movie.MetadataMatchedByImdbId = hasImdbId;
-            movie.Title = data.Title;
+            movie.Title = metadataTitle ?? movie.Title;
             movie.Year = metadataYear ?? movie.Year;
-            movie.ImdbId = data.ImdbID;
+            movie.ImdbId = returnedImdbId ?? originalImdbId;
             movie.MpaRating = NormalizeMetadataValue(data.Rated);
             movie.Genres = ParseGenres(data.Genre);
             movie.PrimaryGenre = movie.Genres.FirstOrDefault();
             movie.MetadataFetched = true;
 
+            // An IMDb ID embedded in the source path is the authoritative movie
+            // identity. Once OMDb successfully resolves that ID, parsed title/year
+            // differences are diagnostic only and must not force manual review.
+            if (hasImdbId)
+            {
+                if (string.IsNullOrWhiteSpace(movie.Title) || !movie.Year.HasValue)
+                {
+                    movie.NeedsReview = true;
+                    movie.ReviewReason =
+                        "IMDb ID matched, but OMDb did not return the title and release year required for naming";
+                    movie.Status = "Needs Review";
+                    return;
+                }
+
+                movie.NeedsReview = false;
+                movie.ReviewReason = null;
+                movie.Status = "IMDb ID Match";
+                return;
+            }
+
             if (movie.MatchConfidence < 85)
             {
                 movie.NeedsReview = true;
-                movie.ReviewReason = hasImdbId
-                    ? $"IMDb ID matched, but parsed title/year differs from OMDb metadata ({movie.MatchConfidence:0}% confidence)"
-                    : $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)";
+                movie.ReviewReason =
+                    $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)";
                 movie.Status = "Needs Review";
             }
             else
             {
                 movie.NeedsReview = false;
                 movie.ReviewReason = null;
-                movie.Status = hasImdbId ? "IMDb ID Match" : "Metadata Enriched";
+                movie.Status = "Metadata Enriched";
             }
+        }
+
+        private static void MarkImdbLookupFailure(Movie movie)
+        {
+            movie.MetadataFetched = false;
+            movie.MetadataMatchedByImdbId = false;
+            movie.NeedsReview = true;
+            movie.ReviewReason = "IMDb ID found, but OMDb lookup failed";
+            movie.MatchConfidence = 0;
+            movie.Status = "IMDb ID Lookup Failed";
         }
 
         private static string? NormalizeMetadataValue(string? value)
         {
-            return string.IsNullOrWhiteSpace(value)
+            return string.IsNullOrWhiteSpace(value) ||
+                   value.Equals("N/A", StringComparison.OrdinalIgnoreCase)
                 ? null
                 : value.Trim();
         }
