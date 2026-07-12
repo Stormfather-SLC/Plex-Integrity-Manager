@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 
@@ -12,16 +13,22 @@ namespace PIM.Infrastructure.Services
     {
         private readonly IDestinationConflictService _destinationConflictService;
         private readonly IDestinationPathBuilder _destinationPathBuilder;
+        private readonly IConfiguration _configuration;
         private readonly ScanProgress _progress;
+        private readonly SourceCleanupStatus _sourceCleanupStatus;
 
         public RenameService(
             IDestinationConflictService destinationConflictService,
             IDestinationPathBuilder destinationPathBuilder,
-            ScanProgress progress)
+            IConfiguration configuration,
+            ScanProgress progress,
+            SourceCleanupStatus sourceCleanupStatus)
         {
             _destinationConflictService = destinationConflictService;
             _destinationPathBuilder = destinationPathBuilder;
+            _configuration = configuration;
             _progress = progress;
+            _sourceCleanupStatus = sourceCleanupStatus;
         }
 
         public void GeneratePreview(
@@ -112,6 +119,15 @@ namespace PIM.Infrastructure.Services
 
             var normalizedDestinationRoot = Path.GetFullPath(destinationRoot);
             var operationName = dryRun ? "Dry Run" : "Live Commit";
+            var removeEmptySourceFolders =
+                !dryRun &&
+                _configuration.GetValue(
+                    "PIM:RemoveEmptySourceFolders",
+                    true);
+            var committedSourceDirectories = new HashSet<string>(
+                StringComparer.OrdinalIgnoreCase);
+
+            _sourceCleanupStatus.Reset(removeEmptySourceFolders);
 
             _progress.Operation = operationName;
             _progress.Total = movies.Count;
@@ -238,10 +254,16 @@ namespace PIM.Infrastructure.Services
                         Console.WriteLine(
                             $"[PIM] Moving: {movie.OriginalFilePath} -> {movie.TargetPath}");
 
+                        var originalDirectory = Path.GetDirectoryName(
+                            movie.OriginalFilePath);
+
                         File.Move(
                             movie.OriginalFilePath,
                             movie.TargetPath,
                             overwrite: false);
+
+                        if (!string.IsNullOrWhiteSpace(originalDirectory))
+                            committedSourceDirectories.Add(originalDirectory);
 
                         _destinationConflictService.RecordDestinationEntry(movie.TargetPath);
                         movie.Status = "Committed";
@@ -284,6 +306,25 @@ namespace PIM.Infrastructure.Services
                         _progress.Processed++;
                     }
                 }
+
+                if (removeEmptySourceFolders)
+                {
+                    _progress.CurrentFile = string.Empty;
+                    _progress.Message = "Removing empty source folders...";
+
+                    var cleanupResult = RemoveEmptyCommittedSourceFolders(
+                        _configuration["PIM:ScanPath"] ?? string.Empty,
+                        committedSourceDirectories);
+
+                    _sourceCleanupStatus.Complete(
+                        cleanupResult.EmptyFoldersRemoved,
+                        cleanupResult.WarningCount);
+
+                    Console.WriteLine(
+                        $"[PIM] Source cleanup finished. " +
+                        $"Removed {cleanupResult.EmptyFoldersRemoved:N0} empty folder(s); " +
+                        $"warnings: {cleanupResult.WarningCount:N0}.");
+                }
             }
             finally
             {
@@ -297,6 +338,139 @@ namespace PIM.Infrastructure.Services
                     $"[PIM] {operationName} finished. " +
                     $"Processed {_progress.Processed:N0} of {_progress.Total:N0} file(s).");
             }
+        }
+
+        private static SourceCleanupResult RemoveEmptyCommittedSourceFolders(
+            string sourceRoot,
+            IEnumerable<string> committedSourceDirectories)
+        {
+            var warningCount = 0;
+            var removedCount = 0;
+
+            if (string.IsNullOrWhiteSpace(sourceRoot))
+            {
+                Console.WriteLine(
+                    "[PIM] Source cleanup warning: the configured source root is empty.");
+                return new SourceCleanupResult(0, 1);
+            }
+
+            string normalizedSourceRoot;
+
+            try
+            {
+                normalizedSourceRoot = NormalizeDirectoryPath(sourceRoot);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[PIM] Source cleanup warning: invalid source root - {ex.Message}");
+                return new SourceCleanupResult(0, 1);
+            }
+
+            var sourceRootPrefix =
+                normalizedSourceRoot + Path.DirectorySeparatorChar;
+            var candidates = new HashSet<string>(
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var sourceDirectory in committedSourceDirectories)
+            {
+                if (string.IsNullOrWhiteSpace(sourceDirectory))
+                    continue;
+
+                try
+                {
+                    var current = NormalizeDirectoryPath(sourceDirectory);
+
+                    if (!current.StartsWith(
+                            sourceRootPrefix,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        warningCount++;
+                        Console.WriteLine(
+                            $"[PIM] Source cleanup warning: folder is outside the configured source root - {current}");
+                        continue;
+                    }
+
+                    while (!string.Equals(
+                               current,
+                               normalizedSourceRoot,
+                               StringComparison.OrdinalIgnoreCase))
+                    {
+                        candidates.Add(current);
+
+                        var parent = Directory.GetParent(current)?.FullName;
+
+                        if (string.IsNullOrWhiteSpace(parent))
+                            break;
+
+                        current = NormalizeDirectoryPath(parent);
+
+                        if (!current.StartsWith(
+                                sourceRootPrefix,
+                                StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(
+                                current,
+                                normalizedSourceRoot,
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            break;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    warningCount++;
+                    Console.WriteLine(
+                        $"[PIM] Source cleanup warning for '{sourceDirectory}': {ex.Message}");
+                }
+            }
+
+            foreach (var directory in candidates
+                         .OrderByDescending(path => path.Length))
+            {
+                try
+                {
+                    if (!Directory.Exists(directory))
+                        continue;
+
+                    var attributes = File.GetAttributes(directory);
+
+                    if (attributes.HasFlag(FileAttributes.ReparsePoint))
+                    {
+                        Console.WriteLine(
+                            $"[PIM] Source cleanup skipped reparse point: {directory}");
+                        continue;
+                    }
+
+                    // EnumerateFileSystemEntries includes hidden files, metadata,
+                    // subtitles, artwork, and remaining subfolders. Nothing is
+                    // removed unless the directory is genuinely empty.
+                    if (Directory.EnumerateFileSystemEntries(directory).Any())
+                        continue;
+
+                    Directory.Delete(directory, recursive: false);
+                    removedCount++;
+
+                    Console.WriteLine(
+                        $"[PIM] Removed empty source folder: {directory}");
+                }
+                catch (Exception ex)
+                {
+                    warningCount++;
+                    Console.WriteLine(
+                        $"[PIM] Source cleanup warning for '{directory}': {ex.Message}");
+                }
+            }
+
+            return new SourceCleanupResult(removedCount, warningCount);
+        }
+
+        private static string NormalizeDirectoryPath(string path)
+        {
+            return Path.GetFullPath(path)
+                .TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
         }
 
         private static void EnsureTargetIsUnderRoot(
@@ -361,5 +535,9 @@ namespace PIM.Infrastructure.Services
                 ? string.Empty
                 : Path.GetExtension(fileName);
         }
+
+        private sealed record SourceCleanupResult(
+            int EmptyFoldersRemoved,
+            int WarningCount);
     }
 }
