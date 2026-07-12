@@ -1,3 +1,4 @@
+using Microsoft.Extensions.FileProviders;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 using PIM.Infrastructure.FileSystem;
@@ -7,6 +8,20 @@ using PIM.Infrastructure.Services;
 using PIM.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var userSettingsDirectory = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+    "Plex Integrity Manager");
+Directory.CreateDirectory(userSettingsDirectory);
+
+// Mutable library settings belong outside the source-controlled project.
+// Loading this provider last lets the user's saved source path override the
+// development default in appsettings.json without editing tracked files.
+builder.Configuration.AddJsonFile(
+    new PhysicalFileProvider(userSettingsDirectory),
+    "library-settings.json",
+    optional: true,
+    reloadOnChange: true);
 
 builder.Services.AddRazorPages();
 builder.Services.AddMemoryCache();
