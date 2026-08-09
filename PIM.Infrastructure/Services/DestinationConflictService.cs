@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
@@ -12,13 +13,44 @@ namespace PIM.Infrastructure.Services
             @"\{edition-(?<edition>[^}]+)\}",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        private readonly ScanProgress _progress;
         private string? _cachedOutputPath;
         private List<string> _cachedDestinationEntries = new();
+
+        public DestinationConflictService(ScanProgress progress)
+        {
+            _progress = progress;
+        }
 
         public void InvalidateCache()
         {
             _cachedOutputPath = null;
             _cachedDestinationEntries = new List<string>();
+        }
+
+        public void RecordDestinationEntry(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path) ||
+                string.IsNullOrWhiteSpace(_cachedOutputPath))
+            {
+                return;
+            }
+
+            try
+            {
+                var fullPath = Path.GetFullPath(path);
+
+                if (!IsPathUnderRoot(_cachedOutputPath, fullPath))
+                    return;
+
+                if (!_cachedDestinationEntries.Any(entry => PathsEqual(entry, fullPath)))
+                    _cachedDestinationEntries.Add(fullPath);
+            }
+            catch
+            {
+                // The exact target-file check still protects the move. Failure to
+                // update the in-memory snapshot should not fail a successful move.
+            }
         }
 
         public DestinationConflictResult Check(
@@ -180,11 +212,52 @@ namespace PIM.Infrastructure.Services
             }
 
             _cachedOutputPath = normalizedOutputPath;
-            _cachedDestinationEntries = Directory.Exists(normalizedOutputPath)
-                ? SafeEnumerateFileSystemEntries(normalizedOutputPath).ToList()
-                : new List<string>();
 
-            return _cachedDestinationEntries;
+            if (!Directory.Exists(normalizedOutputPath))
+            {
+                _cachedDestinationEntries = new List<string>();
+                return _cachedDestinationEntries;
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+            var entries = new List<string>();
+
+            _progress.Operation = "Destination Conflict Check";
+            _progress.Message = "Scanning the destination library for existing movies...";
+            _progress.Total = 0;
+            _progress.Processed = 0;
+            _progress.CurrentFile = normalizedOutputPath;
+            _progress.IsRunning = true;
+
+            Console.WriteLine(
+                $"[PIM] Scanning destination library for conflicts: {normalizedOutputPath}");
+
+            try
+            {
+                foreach (var entry in SafeEnumerateFileSystemEntries(normalizedOutputPath))
+                {
+                    entries.Add(entry);
+                    _progress.Processed = entries.Count;
+                    _progress.CurrentFile = entry;
+                    _progress.Message =
+                        $"Scanning destination library... {entries.Count:N0} entries found.";
+                }
+
+                _cachedDestinationEntries = entries;
+                return _cachedDestinationEntries;
+            }
+            finally
+            {
+                stopwatch.Stop();
+                _progress.CurrentFile = normalizedOutputPath;
+                _progress.Message =
+                    $"Destination scan complete: {entries.Count:N0} entries checked.";
+                _progress.IsRunning = false;
+
+                Console.WriteLine(
+                    $"[PIM] Destination conflict scan complete: " +
+                    $"{entries.Count:N0} entries in {stopwatch.Elapsed}.");
+            }
         }
 
         private static string GetEditionKeyFromPath(string path)
@@ -254,10 +327,25 @@ namespace PIM.Infrastructure.Services
                 }
 
                 foreach (var childFile in childFiles)
-                {
                     yield return childFile;
-                }
             }
+        }
+
+        private static bool IsPathUnderRoot(string rootPath, string candidatePath)
+        {
+            var root = Path.GetFullPath(rootPath)
+                .TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+
+            var candidate = Path.GetFullPath(candidatePath)
+                .TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+
+            return candidate.StartsWith(
+                root + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool PathsEqual(
