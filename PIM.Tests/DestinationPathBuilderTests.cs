@@ -115,9 +115,11 @@ public sealed class DestinationPathBuilderTests
         movie.MpaRating = "R";
 
         var movieFolder = movie.GetNormalizedFolderName();
+        var sourceFileName = movie.FileName
+            ?? throw new InvalidOperationException("The test movie file name is required.");
         var sourceDirectory = Path.Combine(sourceRoot, "R", movieFolder);
         movie.DirectoryPath = sourceDirectory;
-        movie.OriginalFilePath = Path.Combine(sourceDirectory, movie.FileName);
+        movie.OriginalFilePath = Path.Combine(sourceDirectory, sourceFileName);
 
         var profile = CreateProfile(
             OrganizationLevelType.PreserveSourceFolders);
@@ -142,9 +144,11 @@ public sealed class DestinationPathBuilderTests
         movie.MpaRating = "R";
 
         var movieFolder = movie.GetNormalizedFolderName();
+        var sourceFileName = movie.FileName
+            ?? throw new InvalidOperationException("The test movie file name is required.");
         var sourceDirectory = Path.Combine(sourceRoot, "R", movieFolder);
         movie.DirectoryPath = sourceDirectory;
-        movie.OriginalFilePath = Path.Combine(sourceDirectory, movie.FileName);
+        movie.OriginalFilePath = Path.Combine(sourceDirectory, sourceFileName);
 
         var profile = CreateProfile(
             OrganizationLevelType.MpaRating,
