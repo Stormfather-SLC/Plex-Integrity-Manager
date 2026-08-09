@@ -3,6 +3,7 @@
     public enum PlexLibraryConflictType
     {
         None,
+        AlreadyExistsAtTargetPath,
         SameImdbIdDifferentPath,
         SameTitleYearDifferentPath,
         ExistingAlternateVersion,
