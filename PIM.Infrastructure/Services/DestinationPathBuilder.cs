@@ -53,8 +53,23 @@ public sealed class DestinationPathBuilder : IDestinationPathBuilder
             {
                 var safeSegment = SanitizePathSegment(segment);
 
-                if (!string.IsNullOrWhiteSpace(safeSegment))
-                    organizationSegments.Add(safeSegment);
+                if (string.IsNullOrWhiteSpace(safeSegment))
+                    continue;
+
+                // Stacked rules can legitimately resolve to the same folder.
+                // For example, MPA Rating may produce "R" while Preserve Source
+                // Folders also begins with an existing "R" organization folder.
+                // Do not create duplicate adjacent folders such as R\R.
+                if (organizationSegments.Count > 0 &&
+                    string.Equals(
+                        organizationSegments[^1],
+                        safeSegment,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                organizationSegments.Add(safeSegment);
             }
         }
 
@@ -255,9 +270,40 @@ public sealed class DestinationPathBuilder : IDestinationPathBuilder
             return [fallback];
         }
 
-        return relativePath.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries);
+        var segments = relativePath.Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+
+        // Preserve source organization folders, not the movie container itself.
+        // The normalized movie folder is always appended by Build(), so keeping
+        // an existing Plex movie folder here would produce Movie\Movie.
+        if (segments.Count > 0 && IsExistingMovieFolder(movie, segments[^1]))
+            segments.RemoveAt(segments.Count - 1);
+
+        return segments;
+    }
+
+    private static bool IsExistingMovieFolder(Movie movie, string folderName)
+    {
+        var safeFolderName = SanitizePathSegment(folderName);
+        var normalizedMovieFolder = SanitizePathSegment(movie.GetNormalizedFolderName());
+
+        if (string.Equals(
+                safeFolderName,
+                normalizedMovieFolder,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(movie.ImdbId))
+            return false;
+
+        var imdbTag = $"{{imdb-{movie.ImdbId.Trim()}}}";
+        return safeFolderName.Contains(
+            imdbTag,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string GetSortTitle(string? title)
