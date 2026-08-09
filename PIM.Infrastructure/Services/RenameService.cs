@@ -55,9 +55,8 @@ namespace PIM.Infrastructure.Services
                 if (!IsValidForRename(movie))
                 {
                     ClearTarget(movie);
-                    movie.NeedsReview = true;
-                    movie.ReviewReason ??= "Missing required metadata for rename";
-                    movie.Status = movie.ReviewReason;
+                    movie.RequireReview("Missing required metadata for rename");
+                    movie.Status = movie.ReviewReason ?? "Missing required metadata for rename";
                     movie.ApprovedForCommit = false;
                     continue;
                 }
@@ -625,11 +624,9 @@ namespace PIM.Infrastructure.Services
             movie.DestinationConflictReason = result.Message ??
                                               "A destination conflict was detected.";
             movie.ExistingDestinationPath = result.ExistingPath;
-            movie.NeedsReview = true;
-            movie.ApprovedForCommit = false;
+            movie.RequireReview(
+                $"Destination conflict: {movie.DestinationConflictReason}");
             movie.Status = "Needs Review - Destination Changed";
-            movie.ReviewReason =
-                $"Destination conflict: {movie.DestinationConflictReason}";
         }
 
         private static bool IsValidForRename(Movie movie)

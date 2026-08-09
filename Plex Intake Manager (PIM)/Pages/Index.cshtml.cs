@@ -564,7 +564,7 @@ namespace PIM.Web.Pages
 
                 if (string.IsNullOrWhiteSpace(movie.ImdbId))
                 {
-                    movie.NeedsReview = true;
+                    movie.RequireReview("IMDb ID could not be determined");
                     movie.Status = "Metadata Not Found";
                 }
                 else if (!movie.NeedsReview &&

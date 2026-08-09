@@ -10,7 +10,7 @@ namespace PIM.Tests;
 public sealed class OmdbMetadataServiceTests
 {
     [Fact]
-    public async Task EnrichAsync_SuccessfulImdbLookup_IsAuthoritative()
+    public async Task EnrichAsync_SuccessfulImdbLookup_PreservesExistingReview()
     {
         const string json = """
         {
@@ -37,9 +37,9 @@ public sealed class OmdbMetadataServiceTests
 
         Assert.True(movie.MetadataFetched);
         Assert.True(movie.MetadataMatchedByImdbId);
-        Assert.False(movie.NeedsReview);
-        Assert.Null(movie.ReviewReason);
-        Assert.Equal("IMDb ID Match", movie.Status);
+        Assert.True(movie.NeedsReview);
+        Assert.Equal("Missing required metadata for rename", movie.ReviewReason);
+        Assert.Equal("Needs Review", movie.Status);
         Assert.Equal("A Quiet Place", movie.Title);
         Assert.Equal(2018, movie.Year);
         Assert.Equal("PG-13", movie.MpaRating);
