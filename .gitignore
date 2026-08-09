@@ -10,15 +10,37 @@ obj/
 # Logs and caches
 *.log
 *.cache
+*.tmp
+*.bak
+*.dmp
 
 # Test results
 TestResults/
+coverage/
+coverage.*
 
 # VS Code
 .vscode/
 
+# JetBrains IDEs
+.idea/
+
 # Local settings
 appsettings.Development.json
+appsettings.Local.json
+appsettings.*.local.json
+.env
+.env.*
+!.env.example
+
+# Credentials and signing material
+secrets.json
+*.usersecrets.json
+*.pfx
+*.p12
+*.snk
+*.pem
+*.key
 
 # Local application runtime data
 App_Data/
