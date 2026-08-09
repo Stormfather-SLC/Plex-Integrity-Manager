@@ -340,6 +340,7 @@ namespace PIM.Infrastructure.Services
                 .SelectMany(media => media.Part ?? new List<PlexPartDto>())
                 .Select(part => NormalizePath(part.File))
                 .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => path!)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList() ?? new List<string>();
 
@@ -423,7 +424,7 @@ namespace PIM.Infrastructure.Services
             }
 
             return string.Join(
-                ' ',
+                " ",
                 title.Split(
                     ' ',
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
