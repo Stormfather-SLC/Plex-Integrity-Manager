@@ -241,8 +241,6 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        document.Profiles ??= new List<DestinationProfile>();
-
         if (document.Profiles.Count == 0)
             throw new InvalidOperationException(
                 "At least one destination profile is required.");
@@ -537,6 +535,6 @@ public sealed class DestinationProfileStore : IDestinationProfileStore
     {
         public Guid ActiveProfileId { get; set; }
 
-        public List<DestinationProfile>? Profiles { get; set; } = new();
+        public List<DestinationProfile> Profiles { get; set; } = new();
     }
 }
