@@ -19,3 +19,6 @@ TestResults/
 
 # Local settings
 appsettings.Development.json
+
+# Local application runtime data
+App_Data/
