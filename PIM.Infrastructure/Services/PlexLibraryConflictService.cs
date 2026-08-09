@@ -237,8 +237,14 @@ namespace PIM.Infrastructure.Services
                 while (true)
                 {
                     var sectionKey = Uri.EscapeDataString(section.Key!);
+
+                    // Do not request the legacy includeGuids=1 option here.
+                    // On current Plex servers that option can change the response shape
+                    // for large libraries and prevent normal pagination/Metadata loading.
+                    // The standard library listing already includes the title, year,
+                    // media paths, and edition data needed for conflict detection.
                     var envelope = await SendJsonAsync<PlexMediaEnvelope>(
-                        $"/library/sections/{sectionKey}/all?type=1&includeGuids=1",
+                        $"/library/sections/{sectionKey}/all?type=1",
                         token,
                         start,
                         PageSize);
@@ -344,11 +350,19 @@ namespace PIM.Infrastructure.Services
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList() ?? new List<string>();
 
+            // Prefer explicit external GUID data when Plex provides it.
             var imdbId = item.Guids?
                 .Select(guid => NormalizeImdbId(guid.Id))
                 .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
 
             imdbId ??= NormalizeImdbId(item.PrimaryGuid);
+
+            // Normal Plex library listings do not consistently expose external
+            // IMDb GUIDs. Plex-friendly media paths often do contain the canonical
+            // {imdb-tt1234567} tag, so use the path as a strong identity fallback.
+            imdbId ??= paths
+                .Select(NormalizeImdbId)
+                .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
 
             var edition = item.EditionTitle;
 
