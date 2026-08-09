@@ -7,6 +7,7 @@ on:
     branches:
       - main
       - feature/**
+      - integration/**
 
 jobs:
   build-and-test:
@@ -27,5 +28,5 @@ jobs:
       - name: Build web application
         run: dotnet build "Plex Intake Manager (PIM)/PIM.Web.csproj" --configuration Release --no-restore
 
-      - name: Run destination path tests
+      - name: Run tests
         run: dotnet test "PIM.Tests/PIM.Tests.csproj" --configuration Release --verbosity normal
