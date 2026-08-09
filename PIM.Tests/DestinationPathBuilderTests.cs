@@ -107,6 +107,61 @@ public sealed class DestinationPathBuilderTests
             result.OrganizationSegments);
     }
 
+    [Fact]
+    public void Build_PreserveSourceFolders_OmitsExistingPlexMovieFolder()
+    {
+        var sourceRoot = CreateSourceRoot();
+        var movie = CreateMovie();
+        movie.MpaRating = "R";
+
+        var movieFolder = movie.GetNormalizedFolderName();
+        var sourceDirectory = Path.Combine(sourceRoot, "R", movieFolder);
+        movie.DirectoryPath = sourceDirectory;
+        movie.OriginalFilePath = Path.Combine(sourceDirectory, movie.FileName);
+
+        var profile = CreateProfile(
+            OrganizationLevelType.PreserveSourceFolders);
+
+        var result = _builder.Build(movie, profile, sourceRoot, ".mp4");
+
+        Assert.Equal(new[] { "R" }, result.OrganizationSegments);
+        Assert.Equal(
+            Path.Combine(
+                Path.GetFullPath(profile.DestinationRoot),
+                "R",
+                movieFolder,
+                movie.GetNormalizedFileName(".mp4")),
+            result.FullFilePath);
+    }
+
+    [Fact]
+    public void Build_RatingThenPreserveSourceFolders_CollapsesAdjacentDuplicateFolder()
+    {
+        var sourceRoot = CreateSourceRoot();
+        var movie = CreateMovie();
+        movie.MpaRating = "R";
+
+        var movieFolder = movie.GetNormalizedFolderName();
+        var sourceDirectory = Path.Combine(sourceRoot, "R", movieFolder);
+        movie.DirectoryPath = sourceDirectory;
+        movie.OriginalFilePath = Path.Combine(sourceDirectory, movie.FileName);
+
+        var profile = CreateProfile(
+            OrganizationLevelType.MpaRating,
+            OrganizationLevelType.PreserveSourceFolders);
+
+        var result = _builder.Build(movie, profile, sourceRoot, ".mp4");
+
+        Assert.Equal(new[] { "R" }, result.OrganizationSegments);
+        Assert.Equal(
+            Path.Combine(
+                Path.GetFullPath(profile.DestinationRoot),
+                "R",
+                movieFolder,
+                movie.GetNormalizedFileName(".mp4")),
+            result.FullFilePath);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
