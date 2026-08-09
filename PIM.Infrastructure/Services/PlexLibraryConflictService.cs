@@ -95,20 +95,28 @@ namespace PIM.Infrastructure.Services
             var movieEdition = NormalizeEdition(movie.VersionTag);
 
             // A stale Plex database can still point at a path that no longer exists on disk.
-            // Destination conflict detection cannot see that, so flag any identity mismatch
-            // where Plex already associates the proposed target path with another movie.
+            // Destination conflict detection cannot see that, so any Plex item already tied
+            // to the proposed target path must block the move. An identity mismatch is
+            // reported separately because it indicates a more serious library inconsistency.
             if (!string.IsNullOrWhiteSpace(targetPath))
             {
-                var targetPathMismatch = _libraryEntries.FirstOrDefault(entry =>
-                    entry.Paths.Contains(targetPath, StringComparer.OrdinalIgnoreCase) &&
-                    !IdentityMatches(movieImdbId, movieTitle, movie.Year, entry));
+                var targetPathEntry = _libraryEntries.FirstOrDefault(entry =>
+                    entry.Paths.Contains(targetPath, StringComparer.OrdinalIgnoreCase));
 
-                if (targetPathMismatch != null)
+                if (targetPathEntry != null)
                 {
+                    if (!IdentityMatches(movieImdbId, movieTitle, movie.Year, targetPathEntry))
+                    {
+                        return PlexLibraryConflictResult.Conflict(
+                            PlexLibraryConflictType.LibraryMismatch,
+                            $"Plex already associates the proposed target path with a different library item: {FormatIdentity(targetPathEntry)}.",
+                            GetDisplayPath(targetPathEntry));
+                    }
+
                     return PlexLibraryConflictResult.Conflict(
-                        PlexLibraryConflictType.LibraryMismatch,
-                        $"Plex already associates the proposed target path with a different library item: {FormatIdentity(targetPathMismatch)}.",
-                        GetDisplayPath(targetPathMismatch));
+                        PlexLibraryConflictType.AlreadyExistsAtTargetPath,
+                        $"Plex already contains this movie at the proposed target path: {FormatIdentity(targetPathEntry)}.",
+                        GetDisplayPath(targetPathEntry));
                 }
             }
 
