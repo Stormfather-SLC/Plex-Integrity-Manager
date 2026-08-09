@@ -178,22 +178,42 @@ namespace PIM.Web.Pages
                 return RedirectToPage();
             }
 
-            // Reuse completed metadata, but refresh stale cached records when the
-            // active profile needs a field that was not captured previously.
-            var moviesToEnrich = GetMoviesRequiringMetadata(movies, profile);
+            ResetProgress();
+            _progress.IsRunning = true;
 
-            if (moviesToEnrich.Count > 0)
-                await EnrichMoviesAsync(moviesToEnrich);
+            try
+            {
+                // Reuse completed metadata, but refresh stale cached records when the
+                // active profile needs a field that was not captured previously.
+                var moviesToEnrich = GetMoviesRequiringMetadata(movies, profile);
 
-            _conflictDetection.ClearConflictState(movies);
-            _duplicates.Process(movies);
-            _rename.GeneratePreview(movies, profile, sourceRoot);
-            _conflictDetection.ApplyConflictDetection(
-                movies,
-                profile.DestinationRoot);
+                if (moviesToEnrich.Count > 0)
+                    await EnrichMoviesAsync(moviesToEnrich);
 
-            SetCachedMovies(movies);
-            InvalidateDryRunApproval();
+                _progress.CurrentFile = "Checking duplicates and destination conflicts...";
+
+                _conflictDetection.ClearConflictState(movies);
+                _duplicates.Process(movies);
+                _rename.GeneratePreview(movies, profile, sourceRoot);
+
+                _progress.CurrentFile = "Checking Plex library conflicts...";
+
+                _conflictDetection.ApplyConflictDetection(
+                    movies,
+                    profile.DestinationRoot);
+
+                _progress.CurrentFile = "Saving identification results...";
+                SetCachedMovies(movies);
+                InvalidateDryRunApproval();
+            }
+            finally
+            {
+                // Keep the Identify operation marked running until metadata, duplicate
+                // analysis, path generation, Plex validation, and the final cache write
+                // have all completed. Otherwise the browser can reload stale scan state
+                // while conflict detection is still running.
+                ResetProgress(isRunning: false);
+            }
 
             return RedirectToPage(new
             {
@@ -228,7 +248,10 @@ namespace PIM.Web.Pages
                 var moviesToEnrich = GetMoviesRequiringMetadata(movies, profile);
 
                 if (moviesToEnrich.Count > 0)
+                {
                     await EnrichMoviesAsync(moviesToEnrich);
+                    ResetProgress(isRunning: false);
+                }
             }
 
             // Rebuild the exact current plan immediately before either a dry run
@@ -526,42 +549,34 @@ namespace PIM.Web.Pages
             _progress.Total = moviesToEnrich.Count;
             _progress.Processed = 0;
             _progress.CurrentFile = string.Empty;
-            _progress.IsRunning = true;
 
-            try
+            var delayMs = _config.GetValue<int>(
+                "PIM:MetadataDelayMs",
+                DefaultMetadataDelayMs);
+
+            foreach (var movie in moviesToEnrich)
             {
-                var delayMs = _config.GetValue<int>(
-                    "PIM:MetadataDelayMs",
-                    DefaultMetadataDelayMs);
+                _progress.CurrentFile = movie.FileName ?? string.Empty;
+                await _metadata.EnrichAsync(movie);
 
-                foreach (var movie in moviesToEnrich)
+                if (delayMs > 0)
+                    await Task.Delay(delayMs);
+
+                if (string.IsNullOrWhiteSpace(movie.ImdbId))
                 {
-                    _progress.CurrentFile = movie.FileName ?? string.Empty;
-                    await _metadata.EnrichAsync(movie);
-
-                    if (delayMs > 0)
-                        await Task.Delay(delayMs);
-
-                    if (string.IsNullOrWhiteSpace(movie.ImdbId))
-                    {
-                        movie.NeedsReview = true;
-                        movie.Status = "Metadata Not Found";
-                    }
-                    else if (!movie.NeedsReview &&
-                             !string.Equals(
-                                 movie.Status,
-                                 "IMDb ID Match",
-                                 StringComparison.Ordinal))
-                    {
-                        movie.Status = "Metadata Enriched";
-                    }
-
-                    _progress.Processed++;
+                    movie.NeedsReview = true;
+                    movie.Status = "Metadata Not Found";
                 }
-            }
-            finally
-            {
-                ResetProgress(isRunning: false);
+                else if (!movie.NeedsReview &&
+                         !string.Equals(
+                             movie.Status,
+                             "IMDb ID Match",
+                             StringComparison.Ordinal))
+                {
+                    movie.Status = "Metadata Enriched";
+                }
+
+                _progress.Processed++;
             }
         }
 
