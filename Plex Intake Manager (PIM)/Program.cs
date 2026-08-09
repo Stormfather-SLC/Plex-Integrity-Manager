@@ -19,7 +19,7 @@ builder.Services.AddSingleton<ScanProgress>();
 builder.Services.AddScoped<PreviewTreeService>();
 builder.Services.AddScoped<IDryRunPreviewService, DryRunPreviewService>();
 builder.Services.AddScoped<IDestinationConflictService, DestinationConflictService>();
-builder.Services.AddScoped<IPlexLibraryConflictService, PlexLibraryConflictService>();
+builder.Services.AddHttpClient<IPlexLibraryConflictService, PlexLibraryConflictService>();
 builder.Services.AddScoped<IMovieConflictDetectionService, MovieConflictDetectionService>();
 
 var app = builder.Build();
