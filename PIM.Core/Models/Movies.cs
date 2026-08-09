@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace PIM.Core.Models
@@ -6,14 +6,13 @@ namespace PIM.Core.Models
     public class Movie
     {
         // =========================================================
-        // 🔑 Identity
+        // Identity
         // =========================================================
 
         public Guid Id { get; set; } = Guid.NewGuid();
 
-
         // =========================================================
-        // 🔁 Duplicate / Decision Logic
+        // Duplicate / Decision Logic
         // =========================================================
 
         public Guid? DuplicateGroupId { get; set; }
@@ -22,78 +21,50 @@ namespace PIM.Core.Models
 
         public bool KeepRecommended { get; set; }
 
-        /// <summary>
-        /// Indicates whether this movie has been approved for
-        /// processing during the Commit step.
-        /// </summary>
         public bool ApprovedForCommit { get; set; }
 
-        /// <summary>
-        /// Indicates this is a valid alternate version
-        /// (Director's Cut, Extended, etc.)
-        /// </summary>
         public bool IsAlternateVersion { get; set; }
 
-
         // =========================================================
-        // 🔵 Review System (NEW)
+        // Review System
         // =========================================================
 
-        /// <summary>
-        /// Indicates the system is not confident and requires human review.
-        /// </summary>
         public bool NeedsReview { get; set; }
 
-        /// <summary>
-        /// Explains WHY the item needs review (for UI display/debugging).
-        /// </summary>
         public string? ReviewReason { get; set; }
 
         // =========================================================
-        // 🛑 Conflict Detection
+        // Conflict Detection
         // =========================================================
 
-        /// <summary>
-        /// True when the proposed destination path conflicts with something
-        /// already present in the destination library folder.
-        /// </summary>
         public bool HasDestinationConflict { get; set; }
 
         public string? DestinationConflictReason { get; set; }
 
         public string? ExistingDestinationPath { get; set; }
 
-        /// <summary>
-        /// True when Plex already knows about this movie somewhere else.
-        /// </summary>
         public bool HasPlexLibraryConflict { get; set; }
 
         public string? PlexLibraryConflictReason { get; set; }
 
         public string? ExistingPlexLibraryPath { get; set; }
 
-
         // =========================================================
-        // 🔴 Error System (NEW)
+        // Error System
         // =========================================================
 
-        /// <summary>
-        /// Indicates a critical error occurred (OMDb failure, parsing failure, etc.)
-        /// </summary>
         public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
 
-
         // =========================================================
-        // 🔮 Future Decision Enhancements
+        // Version / Edition
         // =========================================================
 
         public string? VersionTag { get; set; }
 
         public bool IsManuallyKept { get; set; }
 
-
         // =========================================================
-        // 🧠 Basic Identification
+        // Basic Identification and Organization Metadata
         // =========================================================
 
         public string? Title { get; set; }
@@ -102,9 +73,26 @@ namespace PIM.Core.Models
 
         public string? ImdbId { get; set; }
 
+        /// <summary>
+        /// OMDb Rated value used by the MPA Rating organization level.
+        /// Values such as N/A, Not Rated, and NR are normalized by the
+        /// destination path builder rather than stored differently here.
+        /// </summary>
+        public string? MpaRating { get; set; }
+
+        /// <summary>
+        /// Ordered genres returned by the metadata provider.
+        /// </summary>
+        public List<string> Genres { get; set; } = new();
+
+        /// <summary>
+        /// The first metadata genre. PIM uses only one genre folder so a movie
+        /// is never copied into several genre branches.
+        /// </summary>
+        public string? PrimaryGenre { get; set; }
 
         // =========================================================
-        // 🔍 Future: Fuzzy Matching
+        // Matching
         // =========================================================
 
         public string? SuggestedTitle { get; set; }
@@ -115,9 +103,8 @@ namespace PIM.Core.Models
 
         public bool MetadataMatchedByImdbId { get; set; }
 
-
         // =========================================================
-        // 📁 File Information
+        // File Information
         // =========================================================
 
         public string OriginalFilePath { get; set; } = string.Empty;
@@ -130,18 +117,16 @@ namespace PIM.Core.Models
 
         public string? OriginalPath => OriginalFilePath;
 
-
         // =========================================================
-        // ⚙️ Processing State
+        // Processing State
         // =========================================================
 
         public bool MetadataFetched { get; set; }
 
         public List<int> CandidateYears { get; set; } = new();
 
-
         // =========================================================
-        // 📦 Output / Rename
+        // Output / Rename
         // =========================================================
 
         public string? NormalizedFolderName { get; set; }
@@ -150,24 +135,26 @@ namespace PIM.Core.Models
 
         public string? TargetPath { get; set; }
 
+        /// <summary>
+        /// Identifies the destination profile that generated TargetPath.
+        /// A changed profile revision invalidates the previous plan.
+        /// </summary>
+        public Guid? DestinationProfileId { get; set; }
+
+        public int DestinationProfileRevision { get; set; }
 
         // =========================================================
-        // ⚠️ Status / Errors
+        // Status / Errors
         // =========================================================
 
         public string Status { get; set; } = "Pending";
 
         public string? ErrorMessage { get; set; }
 
-
         // =========================================================
-        // 🎨 UI Helper (NEW — CRITICAL)
+        // UI Helper
         // =========================================================
 
-        /// <summary>
-        /// Returns the UI color classification for this movie.
-        /// Used for row coloring in the UI.
-        /// </summary>
         public string GetColor()
         {
             if (HasError)
@@ -188,47 +175,48 @@ namespace PIM.Core.Models
             return "neutral";
         }
 
+        // =========================================================
+        // Naming Helpers
+        // =========================================================
 
-        // =========================================================
-        // 🧩 Helper Methods
-        // =========================================================
-        private bool ShouldIncludeEditionTag(string? versionTag)
+        private static bool ShouldIncludeEditionTag(string? versionTag)
         {
             if (string.IsNullOrWhiteSpace(versionTag))
                 return false;
 
             var normalized = versionTag.Trim();
 
-            return !normalized.Equals("Alternate Version", StringComparison.OrdinalIgnoreCase);
+            return !normalized.Equals(
+                "Alternate Version",
+                StringComparison.OrdinalIgnoreCase);
         }
+
         public string GetNormalizedFolderName()
         {
-            if (string.IsNullOrWhiteSpace(Title) ||
-                Year == null ||
-                string.IsNullOrWhiteSpace(ImdbId))
-            {
-                throw new InvalidOperationException(
-                    "Movie is missing required metadata.");
-            }
-
+            ValidateRequiredMetadata();
             return $"{Title} ({Year}) {{imdb-{ImdbId}}}";
         }
 
         public string GetNormalizedFileName(string extension)
         {
-            if (string.IsNullOrWhiteSpace(Title) ||
-                Year == null ||
-                string.IsNullOrWhiteSpace(ImdbId))
-            {
-                throw new InvalidOperationException(
-                    "Movie is missing required metadata.");
-            }
+            ValidateRequiredMetadata();
 
             var editionPart = ShouldIncludeEditionTag(VersionTag)
                 ? $" {{edition-{VersionTag!.Trim()}}}"
                 : string.Empty;
 
             return $"{Title} ({Year}){editionPart} {{imdb-{ImdbId}}}{extension}";
+        }
+
+        private void ValidateRequiredMetadata()
+        {
+            if (string.IsNullOrWhiteSpace(Title) ||
+                Year == null ||
+                string.IsNullOrWhiteSpace(ImdbId))
+            {
+                throw new InvalidOperationException(
+                    "Movie is missing required metadata.");
+            }
         }
     }
 }

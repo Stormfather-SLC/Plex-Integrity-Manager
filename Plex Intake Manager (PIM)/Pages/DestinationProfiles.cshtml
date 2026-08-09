@@ -1,0 +1,480 @@
+@page
+@model PIM.Web.Pages.DestinationProfilesModel
+@using PIM.Core.Models
+@{
+    ViewData["Title"] = "Destination Profiles";
+}
+
+<style>
+    .profiles-shell {
+        display: grid;
+        grid-template-columns: 260px minmax(520px, 1fr) 360px;
+        gap: 1rem;
+        align-items: start;
+    }
+
+    .profiles-panel {
+        border: 1px solid #dfe3e8;
+        border-radius: .6rem;
+        background: #fff;
+        box-shadow: 0 .125rem .25rem rgba(0, 0, 0, .04);
+    }
+
+    .profiles-panel-header {
+        padding: 1rem;
+        border-bottom: 1px solid #e8ebef;
+    }
+
+    .profiles-panel-body {
+        padding: 1rem;
+    }
+
+    .profile-list-item {
+        display: block;
+        padding: .8rem;
+        margin-bottom: .5rem;
+        border: 1px solid #dfe3e8;
+        border-radius: .45rem;
+        color: inherit;
+        text-decoration: none;
+    }
+
+    .profile-list-item:hover,
+    .profile-list-item.selected {
+        border-color: #6ea8fe;
+        background: #eef5ff;
+        color: inherit;
+    }
+
+    .organization-level {
+        border: 1px solid #dfe3e8;
+        border-radius: .55rem;
+        padding: 1rem;
+        margin-bottom: .85rem;
+        background: #fbfcfe;
+    }
+
+    .level-number {
+        width: 2rem;
+        height: 2rem;
+        border-radius: 50%;
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        background: #0d6efd;
+        color: #fff;
+        font-weight: 700;
+        flex: 0 0 auto;
+    }
+
+    .preview-tree-row {
+        display: flex;
+        gap: .45rem;
+        align-items: flex-start;
+        margin-bottom: .45rem;
+        word-break: break-word;
+    }
+
+    .preview-indent-1 { padding-left: 1rem; }
+    .preview-indent-2 { padding-left: 2rem; }
+    .preview-indent-3 { padding-left: 3rem; }
+    .preview-indent-4 { padding-left: 4rem; }
+
+    .bucket-badge {
+        display: inline-block;
+        padding: .2rem .45rem;
+        margin: .15rem .15rem .15rem 0;
+        border-radius: .35rem;
+        background: #e9ecef;
+        font-size: .8rem;
+    }
+
+    .sticky-preview {
+        position: sticky;
+        top: 1rem;
+    }
+
+    @@media (max-width: 1200px) {
+        .profiles-shell {
+            grid-template-columns: 230px 1fr;
+        }
+
+        .preview-column {
+            grid-column: 1 / -1;
+        }
+
+        .sticky-preview {
+            position: static;
+        }
+    }
+
+    @@media (max-width: 768px) {
+        .profiles-shell {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+        <h1 class="mb-1">Destination Profiles</h1>
+        <p class="text-muted mb-0">
+            Stack organization levels in the order PIM should create them beneath the destination root.
+        </p>
+    </div>
+    <a asp-page="/Index" class="btn btn-outline-secondary">Back to Scan</a>
+</div>
+
+@if (TempData["ProfileMessage"] != null)
+{
+    <div class="alert alert-info">@TempData["ProfileMessage"]</div>
+}
+
+<div class="profiles-shell">
+    <aside class="profiles-panel">
+        <div class="profiles-panel-header">
+            <form method="post" asp-page-handler="Create">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="btn btn-primary w-100">+ New Profile</button>
+            </form>
+        </div>
+        <div class="profiles-panel-body">
+            @foreach (var destinationProfile in Model.Profiles)
+            {
+                var isSelected = destinationProfile.Id == Model.Profile.Id;
+                var isActive = destinationProfile.Id == Model.ActiveProfileId;
+
+                <a asp-page="/DestinationProfiles"
+                   asp-route-id="@destinationProfile.Id"
+                   class="profile-list-item @(isSelected ? "selected" : string.Empty)">
+                    <div class="d-flex justify-content-between gap-2">
+                        <strong>@destinationProfile.Name</strong>
+                        @if (isActive)
+                        {
+                            <span class="badge text-bg-success">Active</span>
+                        }
+                    </div>
+                    <div class="small text-muted mt-1">
+                        @destinationProfile.OrganizationLevels.Count level@(destinationProfile.OrganizationLevels.Count == 1 ? string.Empty : "s")
+                    </div>
+                    <div class="small text-muted text-truncate">
+                        @destinationProfile.OrganizationSummary
+                    </div>
+                </a>
+            }
+        </div>
+    </aside>
+
+    <section class="profiles-panel">
+        <div class="profiles-panel-header d-flex justify-content-between align-items-start gap-3">
+            <div>
+                <h2 class="h5 mb-1">Edit Profile</h2>
+                <div class="text-muted small">Revision @Model.Profile.Revision</div>
+            </div>
+        </div>
+
+        <form method="post" id="profileEditorForm">
+            @Html.AntiForgeryToken()
+            <input asp-for="Profile.Id" type="hidden" />
+            <input asp-for="Profile.Revision" type="hidden" />
+
+            <div class="profiles-panel-body border-bottom">
+                <div class="row g-3">
+                    <div class="col-md-5">
+                        <label asp-for="Profile.Name" class="form-label">Profile Name</label>
+                        <input asp-for="Profile.Name" class="form-control" />
+                    </div>
+                    <div class="col-md-7">
+                        <label asp-for="Profile.DestinationRoot" class="form-label">Destination Root Folder</label>
+                        <input asp-for="Profile.DestinationRoot"
+                               class="form-control font-monospace"
+                               placeholder="W:\Movies" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="profiles-panel-body border-bottom">
+                <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+                    <div>
+                        <h3 class="h5 mb-1">Organization Levels</h3>
+                        <div class="text-muted small">
+                            Top level is created first. A profile may contain up to @DestinationProfile.MaximumOrganizationLevels levels.
+                        </div>
+                    </div>
+                </div>
+
+                @if (Model.Profile.OrganizationLevels.Count == 0)
+                {
+                    <div class="alert alert-light border">
+                        This is a flat profile. Movie folders will be created directly under the destination root.
+                    </div>
+                }
+
+                @for (var i = 0; i < Model.Profile.OrganizationLevels.Count; i++)
+                {
+                    var level = Model.Profile.OrganizationLevels[i];
+                    var usesLiteralValue = level.Type == OrganizationLevelType.FixedFolder ||
+                                           level.Type == OrganizationLevelType.LibraryCategory;
+                    var usesFallback = level.Type == OrganizationLevelType.MpaRating ||
+                                       level.Type == OrganizationLevelType.PrimaryGenre ||
+                                       level.Type == OrganizationLevelType.AlphabeticalRange ||
+                                       level.Type == OrganizationLevelType.PreserveSourceFolders;
+
+                    <div class="organization-level" data-level-container>
+                        <input asp-for="Profile.OrganizationLevels[i].Id" type="hidden" />
+
+                        <div class="d-flex gap-3 align-items-start">
+                            <span class="level-number">@(i + 1)</span>
+                            <div class="flex-grow-1">
+                                <div class="row g-2 align-items-end">
+                                    <div class="col-lg-5">
+                                        <label asp-for="Profile.OrganizationLevels[i].Type" class="form-label">Level Type</label>
+                                        <select asp-for="Profile.OrganizationLevels[i].Type"
+                                                asp-items="Model.LevelTypeOptions"
+                                                class="form-select level-type-select"></select>
+                                    </div>
+
+                                    <div class="col-lg-7 literal-settings @(usesLiteralValue ? string.Empty : "d-none")">
+                                        <label asp-for="Profile.OrganizationLevels[i].Value" class="form-label">Folder Name</label>
+                                        <input asp-for="Profile.OrganizationLevels[i].Value"
+                                               class="form-control"
+                                               placeholder="01-Kids & Family" />
+                                    </div>
+
+                                    <div class="col-lg-7 fallback-settings @(usesFallback ? string.Empty : "d-none")">
+                                        <label asp-for="Profile.OrganizationLevels[i].UnknownFolderName" class="form-label">Missing Metadata Folder</label>
+                                        <input asp-for="Profile.OrganizationLevels[i].UnknownFolderName"
+                                               class="form-control" />
+                                    </div>
+                                </div>
+
+                                <div class="small text-muted mt-2">
+                                    @switch (level.Type)
+                                    {
+                                        case OrganizationLevelType.MpaRating:
+                                            <span>Creates folders such as G, PG, PG-13, R, and Unrated.</span>
+                                            break;
+                                        case OrganizationLevelType.PrimaryGenre:
+                                            <span>Uses the first genre returned by OMDb so each movie has one predictable genre folder.</span>
+                                            break;
+                                        case OrganizationLevelType.LibraryCategory:
+                                            <span>Uses your own category name, such as 01-Kids &amp; Family or 04-Holiday.</span>
+                                            break;
+                                        case OrganizationLevelType.AlphabeticalRange:
+                                            <span>Ignores leading The, A, or An when choosing the alphabetical bucket.</span>
+                                            break;
+                                        case OrganizationLevelType.FixedFolder:
+                                            <span>Adds the exact folder name entered above.</span>
+                                            break;
+                                        case OrganizationLevelType.PreserveSourceFolders:
+                                            <span>Preserves folders relative to the configured source root, never the source drive itself.</span>
+                                            break;
+                                    }
+                                </div>
+
+                                @if (level.Type == OrganizationLevelType.AlphabeticalRange)
+                                {
+                                    var buckets = level.AlphabeticalBuckets.Count > 0
+                                        ? level.AlphabeticalBuckets
+                                        : AlphabeticalBucket.CreateDefaultBuckets();
+
+                                    <div class="mt-2">
+                                        @foreach (var bucket in buckets)
+                                        {
+                                            <span class="bucket-badge">@bucket.FolderName</span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+
+                            <div class="btn-group-vertical btn-group-sm" role="group" aria-label="Reorder level">
+                                <button type="submit"
+                                        asp-page-handler="MoveLevel"
+                                        asp-route-index="@i"
+                                        asp-route-direction="up"
+                                        class="btn btn-outline-secondary"
+                                        title="Move up"
+                                        disabled="@(i == 0)">↑</button>
+                                <button type="submit"
+                                        asp-page-handler="MoveLevel"
+                                        asp-route-index="@i"
+                                        asp-route-direction="down"
+                                        class="btn btn-outline-secondary"
+                                        title="Move down"
+                                        disabled="@(i == Model.Profile.OrganizationLevels.Count - 1)">↓</button>
+                                <button type="submit"
+                                        asp-page-handler="RemoveLevel"
+                                        asp-route-index="@i"
+                                        class="btn btn-outline-danger"
+                                        title="Remove level">×</button>
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                <div class="input-group">
+                    <select asp-for="NewLevelType"
+                            asp-items="Model.LevelTypeOptions"
+                            class="form-select"></select>
+                    <button type="submit"
+                            asp-page-handler="AddLevel"
+                            class="btn btn-outline-primary"
+                            disabled="@(Model.Profile.OrganizationLevels.Count >= DestinationProfile.MaximumOrganizationLevels)">
+                        + Add Level
+                    </button>
+                </div>
+            </div>
+
+            <div class="profiles-panel-body border-bottom">
+                <div class="d-flex justify-content-between align-items-start gap-3">
+                    <div>
+                        <h3 class="h5 mb-1">Movie Naming</h3>
+                        <p class="text-muted small mb-0">
+                            Organization is configurable now. The existing Plex-safe naming convention remains fixed for this first implementation.
+                        </p>
+                    </div>
+                </div>
+                <div class="row g-3 mt-1">
+                    <div class="col-md-6">
+                        <label class="form-label">Folder Format</label>
+                        <input class="form-control font-monospace"
+                               value="{Title} ({Year}) {imdb-ID}"
+                               readonly />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">File Format</label>
+                        <input class="form-control font-monospace"
+                               value="{Title} ({Year}) {edition-Edition} {imdb-ID}"
+                               readonly />
+                    </div>
+                </div>
+            </div>
+
+            <div class="profiles-panel-body d-flex flex-wrap justify-content-between gap-2">
+                <div class="d-flex gap-2">
+                    <button type="submit" asp-page-handler="Save" class="btn btn-primary">Save Profile</button>
+                    <button type="submit"
+                            asp-page-handler="Duplicate"
+                            asp-route-profileId="@Model.Profile.Id"
+                            class="btn btn-outline-secondary">Duplicate</button>
+                    <button type="submit"
+                            asp-page-handler="Delete"
+                            asp-route-profileId="@Model.Profile.Id"
+                            class="btn btn-outline-danger"
+                            onclick="return confirm('Delete this destination profile?');">Delete</button>
+                </div>
+
+                <button type="submit"
+                        asp-page-handler="Use"
+                        asp-route-profileId="@Model.Profile.Id"
+                        class="btn btn-success">
+                    Use This Profile for Scan
+                </button>
+            </div>
+        </form>
+    </section>
+
+    <aside class="preview-column">
+        <div class="profiles-panel sticky-preview mb-3">
+            <div class="profiles-panel-header">
+                <h2 class="h5 mb-1">Organization Preview</h2>
+                <div class="text-muted small">Example: Better Off Dead (1985), PG, Comedy</div>
+            </div>
+            <div class="profiles-panel-body">
+                @if (!string.IsNullOrWhiteSpace(Model.PreviewError))
+                {
+                    <div class="alert alert-warning mb-0">@Model.PreviewError</div>
+                }
+                else if (Model.Preview != null)
+                {
+                    <div class="preview-tree-row">
+                        <span>📁</span>
+                        <strong class="text-break">@Model.Preview.DestinationRoot</strong>
+                    </div>
+
+                    var indent = 1;
+                    @foreach (var segment in Model.Preview.OrganizationSegments)
+                    {
+                        <div class="preview-tree-row preview-indent-@Math.Min(indent, 4)">
+                            <span>📁</span>
+                            <span>@segment</span>
+                        </div>
+                        indent++;
+                    }
+
+                    <div class="preview-tree-row preview-indent-@Math.Min(indent, 4)">
+                        <span>📁</span>
+                        <strong>@Model.Preview.MovieFolderName</strong>
+                    </div>
+                    indent++;
+                    <div class="preview-tree-row preview-indent-@Math.Min(indent, 4)">
+                        <span>🎬</span>
+                        <span class="small">@Model.Preview.FileName</span>
+                    </div>
+
+                    @if (Model.Preview.Warnings.Count > 0)
+                    {
+                        <div class="alert alert-warning py-2 mt-3 mb-0 small">
+                            @string.Join(" ", Model.Preview.Warnings)
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+
+        <div class="profiles-panel">
+            <div class="profiles-panel-header">
+                <h2 class="h5 mb-0">Profile Summary</h2>
+            </div>
+            <div class="profiles-panel-body small">
+                <dl class="row mb-0">
+                    <dt class="col-5">Destination</dt>
+                    <dd class="col-7 text-break">@Model.Profile.DestinationRoot</dd>
+
+                    <dt class="col-5">Levels</dt>
+                    <dd class="col-7">@Model.Profile.OrganizationLevels.Count</dd>
+
+                    <dt class="col-5">Order</dt>
+                    <dd class="col-7">@Model.Profile.OrganizationSummary</dd>
+
+                    <dt class="col-5">Status</dt>
+                    <dd class="col-7">
+                        @if (Model.Profile.Id == Model.ActiveProfileId)
+                        {
+                            <span class="badge text-bg-success">Active</span>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-secondary">Not Active</span>
+                        }
+                    </dd>
+                </dl>
+            </div>
+        </div>
+    </aside>
+</div>
+
+@section Scripts {
+    <script>
+        document.querySelectorAll('[data-level-container]').forEach(container => {
+            const select = container.querySelector('.level-type-select');
+            const literal = container.querySelector('.literal-settings');
+            const fallback = container.querySelector('.fallback-settings');
+
+            const refresh = () => {
+                const type = select.value;
+                const usesLiteral = type === 'FixedFolder' || type === 'LibraryCategory';
+                const usesFallback = type === 'MpaRating' ||
+                    type === 'PrimaryGenre' ||
+                    type === 'AlphabeticalRange' ||
+                    type === 'PreserveSourceFolders';
+
+                literal?.classList.toggle('d-none', !usesLiteral);
+                fallback?.classList.toggle('d-none', !usesFallback);
+            };
+
+            select.addEventListener('change', refresh);
+            refresh();
+        });
+    </script>
+}

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 
@@ -9,13 +10,16 @@ namespace PIM.Infrastructure.Services
 
         private readonly IDestinationConflictService _destinationConflictService;
         private readonly IPlexLibraryConflictService _plexLibraryConflictService;
+        private readonly ILogger<MovieConflictDetectionService>? _logger;
 
         public MovieConflictDetectionService(
             IDestinationConflictService destinationConflictService,
-            IPlexLibraryConflictService plexLibraryConflictService)
+            IPlexLibraryConflictService plexLibraryConflictService,
+            ILogger<MovieConflictDetectionService>? logger = null)
         {
             _destinationConflictService = destinationConflictService;
             _plexLibraryConflictService = plexLibraryConflictService;
+            _logger = logger;
         }
 
         public void ClearConflictState(List<Movie> movies)
@@ -82,6 +86,16 @@ namespace PIM.Infrastructure.Services
 
                 var plexResult = _plexLibraryConflictService.Check(movie);
 
+                _logger?.LogInformation(
+                    "Plex conflict result for {Title} ({Year}), IMDb {ImdbId}, target {TargetPath}: HasConflict={HasConflict}, Type={ConflictType}, ExistingPath={ExistingPath}.",
+                    movie.Title,
+                    movie.Year,
+                    movie.ImdbId ?? "<none>",
+                    movie.TargetPath ?? "<none>",
+                    plexResult.HasConflict,
+                    plexResult.ConflictType,
+                    plexResult.ExistingPath ?? "<none>");
+
                 if (plexResult.HasConflict)
                 {
                     movie.HasPlexLibraryConflict = true;
@@ -92,6 +106,16 @@ namespace PIM.Infrastructure.Services
                 if (movie.HasDestinationConflict || movie.HasPlexLibraryConflict)
                 {
                     MarkMovieForConflictReview(movie);
+
+                    _logger?.LogInformation(
+                        "Conflict state applied to {Title} ({Year}): DestinationConflict={DestinationConflict}, PlexConflict={PlexConflict}, NeedsReview={NeedsReview}, ApprovedForCommit={ApprovedForCommit}, Status={Status}.",
+                        movie.Title,
+                        movie.Year,
+                        movie.HasDestinationConflict,
+                        movie.HasPlexLibraryConflict,
+                        movie.NeedsReview,
+                        movie.ApprovedForCommit,
+                        movie.Status);
                 }
             }
         }
