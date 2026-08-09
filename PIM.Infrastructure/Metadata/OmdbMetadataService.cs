@@ -116,31 +116,29 @@ namespace PIM.Infrastructure.Metadata
             {
                 if (string.IsNullOrWhiteSpace(movie.Title) || !movie.Year.HasValue)
                 {
-                    movie.NeedsReview = true;
-                    movie.ReviewReason =
-                        "IMDb ID matched, but OMDb did not return the title and release year required for naming";
+                    movie.RequireReview(
+                        "IMDb ID matched, but OMDb did not return the title and release year required for naming");
                     movie.Status = "Needs Review";
                     return;
                 }
 
-                movie.NeedsReview = false;
-                movie.ReviewReason = null;
-                movie.Status = "IMDb ID Match";
+                movie.Status = movie.NeedsReview
+                    ? "Needs Review"
+                    : "IMDb ID Match";
                 return;
             }
 
             if (movie.MatchConfidence < 85)
             {
-                movie.NeedsReview = true;
-                movie.ReviewReason =
-                    $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)";
+                movie.RequireReview(
+                    $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)");
                 movie.Status = "Needs Review";
             }
             else
             {
-                movie.NeedsReview = false;
-                movie.ReviewReason = null;
-                movie.Status = "Metadata Enriched";
+                movie.Status = movie.NeedsReview
+                    ? "Needs Review"
+                    : "Metadata Enriched";
             }
         }
 
@@ -148,8 +146,7 @@ namespace PIM.Infrastructure.Metadata
         {
             movie.MetadataFetched = false;
             movie.MetadataMatchedByImdbId = false;
-            movie.NeedsReview = true;
-            movie.ReviewReason = "IMDb ID found, but OMDb lookup failed";
+            movie.RequireReview("IMDb ID found, but OMDb lookup failed");
             movie.MatchConfidence = 0;
             movie.Status = "IMDb ID Lookup Failed";
         }

@@ -102,6 +102,42 @@ public sealed class PlexConflictIntegrationTests
         Assert.Contains(Path.Combine("R", "Action"), movie.TargetPath!);
     }
 
+    [Fact]
+    public void ExistingReview_PlexConflict_AppendsReasonWithoutClearingOriginal()
+    {
+        var profile = CreateProfile();
+        var movie = CreateMovie(
+            "A Quiet Place",
+            2018,
+            "tt6644200",
+            "PG-13",
+            versionTag: null);
+        movie.RequireReview("Metadata requires human verification");
+
+        ApplyProfileTarget(movie, profile);
+
+        var detector = new MovieConflictDetectionService(
+            new NoConflictDestinationService(),
+            new StubPlexConflictService(
+                PlexLibraryConflictResult.Conflict(
+                    PlexLibraryConflictType.SameImdbIdDifferentPath,
+                    "Plex already contains this movie.",
+                    @"G:\[PLEX]\Movies\A Quiet Place.mkv")));
+
+        detector.ApplyConflictDetection(new List<Movie> { movie }, profile.DestinationRoot);
+        detector.ApplyConflictDetection(new List<Movie> { movie }, profile.DestinationRoot);
+
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Contains("Metadata requires human verification", movie.ReviewReason);
+        Assert.Contains("Plex library conflict:", movie.ReviewReason);
+        Assert.Equal(
+            1,
+            movie.ReviewReason!.Split(
+                "Plex library conflict:",
+                StringSplitOptions.None).Length - 1);
+    }
+
     private static DestinationProfile CreateProfile(
         params OrganizationLevelType[] levels)
     {

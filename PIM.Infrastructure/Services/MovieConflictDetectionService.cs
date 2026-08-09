@@ -34,17 +34,8 @@ namespace PIM.Infrastructure.Services
                 movie.PlexLibraryConflictReason = null;
                 movie.ExistingPlexLibraryPath = null;
 
-                if (IsConflictReviewReason(movie.ReviewReason))
-                {
-                    movie.ReviewReason = null;
-
-                    if (!movie.HasError)
-                    {
-                        movie.NeedsReview = false;
-                        movie.ApprovedForCommit = ShouldBeApprovedForCommit(movie);
-                        movie.Status = "Rename preview generated";
-                    }
-                }
+                // Conflict flags describe the current check and can be reset.
+                // NeedsReview and ReviewReason are audit state and remain sticky.
             }
         }
 
@@ -69,7 +60,7 @@ namespace PIM.Infrastructure.Services
 
             foreach (var movie in candidates)
             {
-                if (movie.HasDestinationConflict || movie.NeedsReview)
+                if (movie.HasDestinationConflict)
                     continue;
 
                 var destinationResult = _destinationConflictService.Check(
@@ -189,6 +180,12 @@ namespace PIM.Infrastructure.Services
             if (movie.ApprovedForCommit)
                 return true;
 
+            // Review blocks commit but must not hide other safety findings.
+            // Continue read-only conflict checks so the reviewer sees every
+            // known reason that the item cannot be approved.
+            if (movie.NeedsReview)
+                return true;
+
             // DuplicateService deliberately sends equally ranked copies to review.
             // They still need proposed-path comparison so PIM can report the more
             // precise incoming collision instead of only "No clear best file".
@@ -233,19 +230,8 @@ namespace PIM.Infrastructure.Services
                 reasons.Add($"Plex library conflict: {movie.PlexLibraryConflictReason}");
             }
 
-            movie.NeedsReview = true;
-            movie.ApprovedForCommit = false;
+            movie.RequireReview(string.Join(" | ", reasons));
             movie.Status = "Needs Review - Conflict Detected";
-            movie.ReviewReason = string.Join(" | ", reasons);
-        }
-
-        private static bool ShouldBeApprovedForCommit(Movie movie)
-        {
-            return !movie.NeedsReview &&
-                   !movie.HasError &&
-                   (!movie.IsDuplicate ||
-                    movie.KeepRecommended ||
-                    movie.IsAlternateVersion);
         }
 
         private static bool IsConflictReviewReason(string? reviewReason)

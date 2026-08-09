@@ -62,8 +62,8 @@ namespace PIM.Infrastructure.Services
         // =====================================================
 
         /// <summary>
-        /// Clears all decision-related flags so processing can be
-        /// safely re-run multiple times.
+        /// Clears duplicate decision flags so processing can be safely re-run.
+        /// Review state is intentionally sticky until a human resolves it.
         /// </summary>
         private void ResetDecisionFlags(List<Movie> movies)
         {
@@ -85,8 +85,6 @@ namespace PIM.Infrastructure.Services
                 // IsAlternateVersion is a decision flag, so it is recalculated below.
                 movie.IsAlternateVersion = false;
 
-                movie.NeedsReview = false;
-                movie.ReviewReason = null;
             }
         }
 
@@ -171,9 +169,7 @@ namespace PIM.Infrastructure.Services
 
                 foreach (var movie in ordered)
                 {
-                    movie.NeedsReview = true;
-                    movie.ReviewReason = $"No clear best file for {versionLabel}";
-                    movie.ApprovedForCommit = false;
+                    movie.RequireReview($"No clear best file for {versionLabel}");
                     movie.KeepRecommended = false;
                     movie.IsAlternateVersion = false;
                 }
@@ -221,24 +217,25 @@ namespace PIM.Infrastructure.Services
                 // Missing IMDb ID
                 if (string.IsNullOrWhiteSpace(movie.ImdbId))
                 {
-                    movie.NeedsReview = true;
-                    movie.ReviewReason ??= "Missing IMDb ID";
+                    movie.RequireReview("Missing IMDb ID");
                 }
 
                 // Suspiciously long filename
                 if (!string.IsNullOrEmpty(movie.FileName) &&
                     movie.FileName.Length > 120)
                 {
-                    movie.NeedsReview = true;
-                    movie.ReviewReason ??= "Suspicious file name";
+                    movie.RequireReview("Suspicious file name");
                 }
 
-                // Low-confidence fuzzy match
-                if (movie.IsFuzzyMatch &&
-                    movie.MatchConfidence < 0.7)
+                // OMDb confidence is represented on a 0-100 scale. IMDb-ID
+                // matches are authoritative, so only title-based matches use
+                // the confidence threshold.
+                if (movie.MetadataFetched &&
+                    !movie.MetadataMatchedByImdbId &&
+                    movie.MatchConfidence < 85)
                 {
-                    movie.NeedsReview = true;
-                    movie.ReviewReason ??= "Low confidence match";
+                    movie.RequireReview(
+                        $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)");
                 }
 
                 // Anything requiring review should not be auto-approved.

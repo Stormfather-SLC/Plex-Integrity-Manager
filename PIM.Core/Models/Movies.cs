@@ -33,6 +33,40 @@ namespace PIM.Core.Models
 
         public string? ReviewReason { get; set; }
 
+        /// <summary>
+        /// Marks the movie for human review without discarding an earlier reason.
+        /// Automated pipeline stages may add review requirements, but only an
+        /// explicit human-resolution workflow should clear them.
+        /// </summary>
+        public void RequireReview(string reason)
+        {
+            NeedsReview = true;
+            ApprovedForCommit = false;
+
+            if (string.IsNullOrWhiteSpace(reason))
+                return;
+
+            var existingReasons = (ReviewReason ?? string.Empty).Split(
+                " | ",
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+            var newReasons = reason.Split(
+                " | ",
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            foreach (var newReason in newReasons)
+            {
+                if (!existingReasons.Contains(
+                        newReason,
+                        StringComparer.OrdinalIgnoreCase))
+                {
+                    existingReasons.Add(newReason);
+                }
+            }
+
+            ReviewReason = string.Join(" | ", existingReasons);
+        }
+
         // =========================================================
         // Conflict Detection
         // =========================================================
