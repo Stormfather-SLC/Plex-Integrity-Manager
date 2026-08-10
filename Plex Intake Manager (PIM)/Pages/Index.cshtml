@@ -455,7 +455,7 @@
             </button>
         </li>
 
-        @if (Model.Movies.Any(m => !string.IsNullOrWhiteSpace(m.ImdbId)))
+        @if (Model.Movies.Any())
         {
             <!-- Preview Tree -->
             <li class="nav-item" role="presentation">
@@ -615,7 +615,7 @@
             </div>
         </div>
 
-        @if (Model.Movies.Any(m => !string.IsNullOrWhiteSpace(m.ImdbId)))
+        @if (Model.Movies.Any())
         {
             <!-- =================================================
                  🌳 PREVIEW TREE TAB
