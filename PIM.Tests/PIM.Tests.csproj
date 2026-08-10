@@ -25,6 +25,7 @@
   <ItemGroup>
     <ProjectReference Include="..\PIM.Core\PIM.Core.csproj" />
     <ProjectReference Include="..\PIM.Infrastructure\PIM.Infrastructure.csproj" />
+    <ProjectReference Include="..\Plex Intake Manager (PIM)\PIM.Web.csproj" />
   </ItemGroup>
 
 </Project>
