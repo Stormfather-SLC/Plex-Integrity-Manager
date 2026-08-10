@@ -88,3 +88,82 @@ For release-equivalent verification, use `--configuration Release`. Do not use `
 ## Git expectations
 
 Preserve all existing work. Do not discard, overwrite, reset, clean, stash, rebase, merge, commit, push, force-push, or change branches unless the owner explicitly requests that exact Git action. Keep diffs focused and do not edit generated `bin/`, `obj/`, `.vs/`, test-results, logs, or local settings. Never run commands that implicitly pull or publish changes without approval.
+
+## PIM Product Direction and Roadmap
+
+Plex Integrity Manager (PIM) is being developed through these stages:
+
+PIM Alpha → PIM MVP → PIM Basic → PIM Plus → PIM Pro → PIM Ultimate
+
+MVP is a development milestone, not a commercial tier. PIM Basic is the first intended sellable product after MVP validation.
+
+### MVP Product Promise
+
+PIM must safely:
+
+- identify messy movie files;
+- determine intended Plex-compatible destinations;
+- compare those planned destinations and identities against the real Plex library;
+- clearly explain exactly what it plans to do;
+- flag uncertainty or conflicts for human review;
+- prevent uncertain items from being executed;
+- and perform only explicitly approved file operations.
+
+The objective of MVP is not maximum automation. The objective is trustworthiness.
+
+### Development Priorities
+
+Follow this roadmap unless the user explicitly changes the priority:
+
+1. Stabilize the current codebase and Codex development workflow.
+2. Build and validate Plex Library Conflict Detection.
+3. Improve Needs Review visibility and behavior.
+4. Improve IMDb ID confidence handling.
+5. Fix OutputPath changes so they do not unnecessarily re-enrich metadata.
+6. Review execution safety and logging.
+7. Reach “PIM MVP — TRUSTWORTHY.”
+8. Dogfood heavily against the owner's own Plex library.
+9. Run a small private beta with roughly 5–10 Plex owners.
+10. Fix issues revealed by beta.
+11. Launch PIM Basic 1.0.
+12. Develop PIM Plus, Pro, and eventually Ultimate afterward.
+
+### Current Roadmap Status
+
+- Codebase/Codex workflow stabilization: substantially established.
+- Plex Library Conflict Detection: COMPLETE for MVP.
+  - Production pagination validated against a real Plex library.
+  - Automated pagination regression tests are present.
+  - Real-world read-only validation successfully found a movie at Plex pagination offset 2500 through the normal PIM pipeline.
+- Current priority: Needs Review visibility and behavior.
+
+Update this status only when the user explicitly confirms that a roadmap milestone has been completed or reprioritized.
+
+### Product Development Principles
+
+When making implementation recommendations or code changes:
+
+- Protect source media above convenience or automation.
+- Plex integration is read-only unless the user explicitly changes the product requirement in the future.
+- Prefer Dry Run and preview-first workflows before destructive operations.
+- Fail closed whenever identity, destination, conflict state, or execution safety is uncertain.
+- Unresolved Needs Review items must not be executable.
+- Make uncertainty obvious and understandable to the user.
+- Favor focused, high-value MVP changes over broad redesigns.
+- Preserve working safety behavior unless there is a demonstrated reason to change it.
+- Avoid implementing features intended for Basic/Plus/Pro/Ultimate early unless specifically requested.
+- Do not expand a task into adjacent roadmap items without approval.
+- Tests should protect safety-critical behavior and regressions.
+- A technically elegant solution is not automatically the right solution if it adds unnecessary complexity before MVP.
+
+### Scope Discipline
+
+Before implementing a feature, determine whether it belongs to the current roadmap priority.
+
+If a proposed improvement belongs to a later roadmap stage:
+
+- identify it;
+- record/recommend it as future work when useful;
+- but do not implement it unless explicitly requested.
+
+For MVP, prefer the smallest design that makes PIM safer, clearer, and more trustworthy.
