@@ -27,14 +27,7 @@ namespace PIM.Infrastructure.Services
             foreach (var movie in movies)
             {
                 ClearDestinationConflictState(movie);
-
-                movie.HasPlexLibraryConflict = false;
-                movie.PlexLibraryConflictReason = null;
-                movie.ExistingPlexLibraryPath = null;
-
-                RemoveConflictReviewReasons(
-                    movie,
-                    IsPlexConflictReviewReason);
+                ClearPlexConflictState(movie);
             }
         }
 
@@ -46,7 +39,17 @@ namespace PIM.Infrastructure.Services
                 ClearDestinationConflictState(movie);
         }
 
-        public void ApplyConflictDetection(List<Movie> movies, string outputPath)
+        public void ClearPlexConflictState(List<Movie> movies)
+        {
+            foreach (var movie in movies)
+                ClearPlexConflictState(movie);
+        }
+
+        public void ApplyConflictDetection(
+            List<Movie> movies,
+            string outputPath,
+            string? sourceRoot = null,
+            LibraryGoal libraryGoal = LibraryGoal.Consolidation)
         {
             // Remember prior conflict rows before clearing their transient state.
             // This allows a commit-time recheck to evaluate the same files again.
@@ -87,21 +90,37 @@ namespace PIM.Infrastructure.Services
                 // even when an incoming or destination-filesystem conflict was
                 // already found so neither reason hides the other.
                 var plexResult = _plexLibraryConflictService.Check(movie);
+                var plexPolicy = plexResult.HasConflict
+                    ? PlexMatchPolicy.Evaluate(
+                        libraryGoal,
+                        sourceRoot,
+                        movie,
+                        plexResult)
+                    : null;
 
                 _logger?.LogInformation(
-                    "Plex conflict result for {Title} ({Year}), IMDb {ImdbId}, target {TargetPath}: HasConflict={HasConflict}, Type={ConflictType}, ExistingPath={ExistingPath}.",
+                    "Plex result for {Title} ({Year}), IMDb {ImdbId}, target {TargetPath}, goal {LibraryGoal}: HasConflict={HasConflict}, Type={ConflictType}, TrackedMigration={TrackedMigration}, ExistingPath={ExistingPath}.",
                     movie.Title,
                     movie.Year,
                     movie.ImdbId ?? "<none>",
                     movie.TargetPath ?? "<none>",
+                    libraryGoal,
                     plexResult.HasConflict,
                     plexResult.ConflictType,
+                    plexPolicy?.IsTrackedMigration ?? false,
                     plexResult.ExistingPath ?? "<none>");
 
-                if (plexResult.HasConflict)
+                if (plexPolicy?.IsTrackedMigration == true)
+                {
+                    movie.IsPlexTrackedMigration = true;
+                    movie.PlexTrackedMigrationReason = plexPolicy.Message;
+                    movie.ExistingPlexLibraryPath = plexResult.ExistingPath;
+                }
+                else if (plexResult.HasConflict)
                 {
                     movie.HasPlexLibraryConflict = true;
-                    movie.PlexLibraryConflictReason = plexResult.Message;
+                    movie.PlexLibraryConflictReason = plexPolicy?.Message ??
+                                                      plexResult.Message;
                     movie.ExistingPlexLibraryPath = plexResult.ExistingPath;
                 }
 
@@ -236,6 +255,19 @@ namespace PIM.Infrastructure.Services
             RemoveConflictReviewReasons(
                 movie,
                 IsDestinationConflictReviewReason);
+        }
+
+        private static void ClearPlexConflictState(Movie movie)
+        {
+            movie.HasPlexLibraryConflict = false;
+            movie.PlexLibraryConflictReason = null;
+            movie.ExistingPlexLibraryPath = null;
+            movie.IsPlexTrackedMigration = false;
+            movie.PlexTrackedMigrationReason = null;
+
+            RemoveConflictReviewReasons(
+                movie,
+                IsPlexConflictReviewReason);
         }
 
         private static void RemoveConflictReviewReasons(

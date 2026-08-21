@@ -5,9 +5,14 @@ namespace PIM.Infrastructure.Services;
 
 public class DryRunPreviewService : IDryRunPreviewService
 {
-    public DryRunPreviewResult BuildPreview(IEnumerable<Movie> movies)
+    public DryRunPreviewResult BuildPreview(
+        IEnumerable<Movie> movies,
+        LibraryGoal libraryGoal = LibraryGoal.Consolidation)
     {
-        var result = new DryRunPreviewResult();
+        var result = new DryRunPreviewResult
+        {
+            LibraryGoal = libraryGoal
+        };
 
         foreach (var movie in movies)
         {
@@ -59,7 +64,9 @@ public class DryRunPreviewService : IDryRunPreviewService
 
             HasPlexLibraryConflict = movie.HasPlexLibraryConflict,
             PlexLibraryConflictReason = movie.PlexLibraryConflictReason ?? string.Empty,
-            ExistingPlexLibraryPath = movie.ExistingPlexLibraryPath ?? string.Empty
+            ExistingPlexLibraryPath = movie.ExistingPlexLibraryPath ?? string.Empty,
+            IsPlexTrackedMigration = movie.IsPlexTrackedMigration,
+            PlexTrackedMigrationReason = movie.PlexTrackedMigrationReason ?? string.Empty
         };
 
         if (movie.NeedsReview)
@@ -70,7 +77,7 @@ public class DryRunPreviewService : IDryRunPreviewService
             // For normal review rows, TargetPath may not be useful or safe.
             // For conflict rows, keep the proposed target visible so the user can
             // compare it against the existing destination/Plex path.
-            if (!item.HasAnyConflict)
+            if (!item.HasPathComparisonContext)
             {
                 item.TargetPath = string.Empty;
             }

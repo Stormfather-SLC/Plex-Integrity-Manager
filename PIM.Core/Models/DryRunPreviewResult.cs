@@ -2,6 +2,8 @@
 
 public class DryRunPreviewResult
 {
+    public LibraryGoal LibraryGoal { get; set; } = LibraryGoal.Consolidation;
+
     public int TotalFiles { get; set; }
     public int ReadyToMoveCount { get; set; }
     public int DuplicateSkipCount { get; set; }

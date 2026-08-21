@@ -6,8 +6,14 @@ namespace PIM.Core.Interfaces
     {
         void ClearDestinationConflictState(List<Movie> movies);
 
+        void ClearPlexConflictState(List<Movie> movies);
+
         void ClearConflictState(List<Movie> movies);
 
-        void ApplyConflictDetection(List<Movie> movies, string outputPath);
+        void ApplyConflictDetection(
+            List<Movie> movies,
+            string outputPath,
+            string? sourceRoot = null,
+            LibraryGoal libraryGoal = LibraryGoal.Consolidation);
     }
 }

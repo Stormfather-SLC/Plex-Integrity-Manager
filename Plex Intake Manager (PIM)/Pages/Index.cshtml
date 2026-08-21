@@ -51,6 +51,39 @@
                 <input asp-for="OutputPath" class="form-control" />
             </div>
 
+            <!-- Library Goal -->
+            <fieldset class="mb-3">
+                <legend class="form-label fs-6">Library Goal</legend>
+
+                <div class="form-check mb-2">
+                    <input asp-for="LibraryGoal"
+                           class="form-check-input"
+                           type="radio"
+                           id="libraryGoalConsolidation"
+                           value="@PIM.Core.Models.LibraryGoal.Consolidation" />
+                    <label class="form-check-label" for="libraryGoalConsolidation">
+                        <strong>Consolidation</strong><br />
+                        <span class="text-muted">
+                            @PIM.Core.Models.LibraryGoalSettings.GetDescription(PIM.Core.Models.LibraryGoal.Consolidation)
+                        </span>
+                    </label>
+                </div>
+
+                <div class="form-check">
+                    <input asp-for="LibraryGoal"
+                           class="form-check-input"
+                           type="radio"
+                           id="libraryGoalReorganization"
+                           value="@PIM.Core.Models.LibraryGoal.ReorganizationMigration" />
+                    <label class="form-check-label" for="libraryGoalReorganization">
+                        <strong>Reorganization / Migration</strong><br />
+                        <span class="text-muted">
+                            @PIM.Core.Models.LibraryGoalSettings.GetDescription(PIM.Core.Models.LibraryGoal.ReorganizationMigration)
+                        </span>
+                    </label>
+                </div>
+            </fieldset>
+
             <!-- Save Settings -->
             <button type="submit" class="btn btn-secondary">
                 💾 Save Settings
@@ -245,6 +278,9 @@
                 if you run the commit live.
                 <br />
                 <strong>Total Previewed Files:</strong> @Model.DryRunPreview.TotalFiles
+                <br />
+                <strong>Library Goal:</strong>
+                @PIM.Core.Models.LibraryGoalSettings.GetDisplayName(Model.DryRunPreview.LibraryGoal)
             </p>
 
             <!-- Summary Filter Cards -->
@@ -404,6 +440,31 @@
                                                 <strong>Reason:</strong>
                                                 @item.PlexLibraryConflictReason
                                             </div>
+
+                                            @if (!string.IsNullOrWhiteSpace(item.ExistingPlexLibraryPath))
+                                            {
+                                                <div class="mt-1">
+                                                    <strong>Existing Plex Path:</strong>
+                                                    <div class="text-break">@item.ExistingPlexLibraryPath</div>
+                                                </div>
+                                            }
+
+                                            @if (!string.IsNullOrWhiteSpace(item.TargetPath))
+                                            {
+                                                <div class="mt-1">
+                                                    <strong>Proposed Path:</strong>
+                                                    <div class="text-break">@item.TargetPath</div>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+
+                                    @if (item.IsPlexTrackedMigration)
+                                    {
+                                        <div class="alert alert-success mt-2 mb-0 p-2" style="font-size:0.85em;">
+                                            <div class="fw-bold">Plex-tracked migration</div>
+
+                                            <div>@item.PlexTrackedMigrationReason</div>
 
                                             @if (!string.IsNullOrWhiteSpace(item.ExistingPlexLibraryPath))
                                             {
@@ -593,6 +654,21 @@
                                         <span style="font-size:0.8em; color:#004085;">
                                             @movie.ReviewReason
                                         </span>
+                                    }
+
+                                    @if (movie.IsPlexTrackedMigration)
+                                    {
+                                        <div class="alert alert-success mt-1 mb-0 p-2" style="font-size:0.8em;">
+                                            <strong>Plex-tracked migration</strong>
+                                            <div>@movie.PlexTrackedMigrationReason</div>
+                                            @if (!string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath))
+                                            {
+                                                <div class="text-break">
+                                                    <strong>Existing Plex Path:</strong>
+                                                    @movie.ExistingPlexLibraryPath
+                                                </div>
+                                            }
+                                        </div>
                                     }
                                 </td>
 
