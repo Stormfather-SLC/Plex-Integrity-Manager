@@ -4,5 +4,7 @@ namespace PIM.Core.Interfaces;
 
 public interface IDryRunPreviewService
 {
-    DryRunPreviewResult BuildPreview(IEnumerable<Movie> movies);
+    DryRunPreviewResult BuildPreview(
+        IEnumerable<Movie> movies,
+        LibraryGoal libraryGoal = LibraryGoal.Consolidation);
 }

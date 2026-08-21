@@ -83,6 +83,10 @@ namespace PIM.Core.Models
 
         public string? ExistingPlexLibraryPath { get; set; }
 
+        public bool IsPlexTrackedMigration { get; set; }
+
+        public string? PlexTrackedMigrationReason { get; set; }
+
         // =========================================================
         // Error System
         // =========================================================

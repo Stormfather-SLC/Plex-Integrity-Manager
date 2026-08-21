@@ -40,6 +40,13 @@ public class DryRunPreviewItem
 
     public string ExistingPlexLibraryPath { get; set; } = string.Empty;
 
+    public bool IsPlexTrackedMigration { get; set; }
+
+    public string PlexTrackedMigrationReason { get; set; } = string.Empty;
+
     public bool HasAnyConflict =>
         HasDestinationConflict || HasPlexLibraryConflict;
+
+    public bool HasPathComparisonContext =>
+        HasAnyConflict || IsPlexTrackedMigration;
 }
