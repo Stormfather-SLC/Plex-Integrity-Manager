@@ -110,6 +110,9 @@ namespace PIM.Web.Pages
             InvalidateDryRunApproval();
 
             var rootPath = _config["PIM:ScanPath"] ?? string.Empty;
+            var destinationRoot = _profileStore
+                .GetActiveProfile()
+                .DestinationRoot;
 
             if (string.IsNullOrWhiteSpace(rootPath))
             {
@@ -127,7 +130,9 @@ namespace PIM.Web.Pages
             {
                 try
                 {
-                    var files = _scanner.GetFiles(rootPath);
+                    var files = _scanner.GetFiles(
+                        rootPath,
+                        destinationRoot);
                     _progress.Total = files.Count;
 
                     var movies = new List<Movie>();
@@ -343,6 +348,8 @@ namespace PIM.Web.Pages
             try
             {
                 var previousScanPath = _config["PIM:ScanPath"] ?? string.Empty;
+                var profile = _profileStore.GetActiveProfile();
+                var previousOutputPath = profile.DestinationRoot;
                 ScanPath = ScanPath.Trim();
                 OutputPath = OutputPath.Trim();
 
@@ -392,7 +399,6 @@ namespace PIM.Web.Pages
                 _config["PIM:ScanPath"] = ScanPath;
                 _config["PIM:OutputPath"] = OutputPath;
 
-                var profile = _profileStore.GetActiveProfile();
                 profile.DestinationRoot = OutputPath;
                 _profileStore.Save(profile);
 
@@ -400,11 +406,23 @@ namespace PIM.Web.Pages
                     previousScanPath.Trim(),
                     ScanPath,
                     StringComparison.OrdinalIgnoreCase);
+                var outputChanged = !PathsEqual(
+                    previousOutputPath,
+                    OutputPath);
 
                 if (sourceChanged)
                 {
                     _cache.Remove(MovieScanCacheKey);
                     ResetProgress();
+                }
+                else if (outputChanged && TryGetCachedMovies(out var cachedMovies))
+                {
+                    // Keep the scan and enriched identity data, but remove
+                    // destination-only findings from the old output root. The
+                    // redirected GET rebuilds targets and independently checks
+                    // the new destination and Plex against the new profile revision.
+                    _conflictDetection.ClearDestinationConflictState(cachedMovies);
+                    SetCachedMovies(cachedMovies);
                 }
 
                 InvalidateDryRunApproval();
@@ -652,6 +670,33 @@ namespace PIM.Web.Pages
 
             return Convert.ToHexString(
                 SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+        }
+
+        private static bool PathsEqual(string firstPath, string secondPath)
+        {
+            try
+            {
+                var firstFullPath = Path.GetFullPath(firstPath)
+                    .TrimEnd(
+                        Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar);
+                var secondFullPath = Path.GetFullPath(secondPath)
+                    .TrimEnd(
+                        Path.DirectorySeparatorChar,
+                        Path.AltDirectorySeparatorChar);
+
+                return string.Equals(
+                    firstFullPath,
+                    secondFullPath,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return string.Equals(
+                    firstPath.Trim(),
+                    secondPath.Trim(),
+                    StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         private static CommitSummary BuildCommitSummary(

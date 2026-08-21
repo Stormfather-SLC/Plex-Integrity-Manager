@@ -26,17 +26,24 @@ namespace PIM.Infrastructure.Services
         {
             foreach (var movie in movies)
             {
-                movie.HasDestinationConflict = false;
-                movie.DestinationConflictReason = null;
-                movie.ExistingDestinationPath = null;
+                ClearDestinationConflictState(movie);
 
                 movie.HasPlexLibraryConflict = false;
                 movie.PlexLibraryConflictReason = null;
                 movie.ExistingPlexLibraryPath = null;
 
-                // Conflict flags describe the current check and can be reset.
-                // NeedsReview and ReviewReason are audit state and remain sticky.
+                RemoveConflictReviewReasons(
+                    movie,
+                    IsPlexConflictReviewReason);
             }
+        }
+
+        public void ClearDestinationConflictState(List<Movie> movies)
+        {
+            _destinationConflictService.InvalidateCache();
+
+            foreach (var movie in movies)
+                ClearDestinationConflictState(movie);
         }
 
         public void ApplyConflictDetection(List<Movie> movies, string outputPath)
@@ -50,6 +57,7 @@ namespace PIM.Infrastructure.Services
 
             ClearConflictState(movies);
             _destinationConflictService.InvalidateCache();
+            var normalizedOutputPath = NormalizePath(outputPath);
 
             var candidates = movies
                 .Where(movie => IsConflictCandidate(movie, previousConflictIds))
@@ -60,21 +68,24 @@ namespace PIM.Infrastructure.Services
 
             foreach (var movie in candidates)
             {
-                if (movie.HasDestinationConflict)
-                    continue;
-
-                var destinationResult = _destinationConflictService.Check(
-                    movie,
-                    outputPath);
-
-                if (destinationResult.HasConflict)
+                if (!movie.HasDestinationConflict)
                 {
-                    SetDestinationConflict(
+                    var destinationResult = _destinationConflictService.Check(
                         movie,
-                        destinationResult.Message,
-                        destinationResult.ExistingPath);
+                        normalizedOutputPath);
+
+                    if (destinationResult.HasConflict)
+                    {
+                        SetDestinationConflict(
+                            movie,
+                            destinationResult.Message,
+                            destinationResult.ExistingPath);
+                    }
                 }
 
+                // Plex is an independent read-only safety boundary. Evaluate it
+                // even when an incoming or destination-filesystem conflict was
+                // already found so neither reason hides the other.
                 var plexResult = _plexLibraryConflictService.Check(movie);
 
                 _logger?.LogInformation(
@@ -216,6 +227,45 @@ namespace PIM.Infrastructure.Services
             movie.ExistingDestinationPath = existingPath;
         }
 
+        private static void ClearDestinationConflictState(Movie movie)
+        {
+            movie.HasDestinationConflict = false;
+            movie.DestinationConflictReason = null;
+            movie.ExistingDestinationPath = null;
+
+            RemoveConflictReviewReasons(
+                movie,
+                IsDestinationConflictReviewReason);
+        }
+
+        private static void RemoveConflictReviewReasons(
+            Movie movie,
+            Func<string, bool> shouldRemove)
+        {
+            if (string.IsNullOrWhiteSpace(movie.ReviewReason))
+                return;
+
+            var remainingReasons = movie.ReviewReason.Split(
+                    " | ",
+                    StringSplitOptions.RemoveEmptyEntries |
+                    StringSplitOptions.TrimEntries)
+                .Where(reason => !shouldRemove(reason))
+                .ToList();
+
+            movie.ReviewReason = remainingReasons.Count == 0
+                ? null
+                : string.Join(" | ", remainingReasons);
+            movie.NeedsReview = remainingReasons.Count > 0;
+
+            if (string.Equals(
+                    movie.Status,
+                    "Needs Review - Conflict Detected",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                movie.Status = movie.ReviewReason ?? "Pending";
+            }
+        }
+
         private static void MarkMovieForConflictReview(Movie movie)
         {
             var reasons = new List<string>();
@@ -245,6 +295,20 @@ namespace PIM.Infrastructure.Services
                    reviewReason.Contains(
                        "Plex library conflict:",
                        StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsDestinationConflictReviewReason(string reason)
+        {
+            return reason.StartsWith(
+                "Destination conflict:",
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsPlexConflictReviewReason(string reason)
+        {
+            return reason.StartsWith(
+                "Plex library conflict:",
+                StringComparison.OrdinalIgnoreCase);
         }
 
         private static string BuildMovieEditionIdentityKey(Movie movie)
