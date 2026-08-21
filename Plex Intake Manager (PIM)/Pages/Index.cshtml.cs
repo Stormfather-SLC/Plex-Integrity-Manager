@@ -110,6 +110,9 @@ namespace PIM.Web.Pages
             InvalidateDryRunApproval();
 
             var rootPath = _config["PIM:ScanPath"] ?? string.Empty;
+            var destinationRoot = _profileStore
+                .GetActiveProfile()
+                .DestinationRoot;
 
             if (string.IsNullOrWhiteSpace(rootPath))
             {
@@ -127,7 +130,9 @@ namespace PIM.Web.Pages
             {
                 try
                 {
-                    var files = _scanner.GetFiles(rootPath);
+                    var files = _scanner.GetFiles(
+                        rootPath,
+                        destinationRoot);
                     _progress.Total = files.Count;
 
                     var movies = new List<Movie>();

@@ -33,8 +33,12 @@ namespace PIM.Core.Interfaces
         /// - Calls IFileNameParser to extract title/year
         /// </summary>
         /// <param name="rootPath">Root directory to scan</param>
+        /// <param name="excludedRootPath">
+        /// Optional directory tree to exclude, such as a destination nested
+        /// beneath the source directory.
+        /// </param>
         /// <returns>List of parsed Movie objects</returns>
-        List<Movie> Scan(string rootPath);
+        List<Movie> Scan(string rootPath, string? excludedRootPath = null);
 
         /// <summary>
         /// Returns ONLY file paths for valid video files.
@@ -48,7 +52,11 @@ namespace PIM.Core.Interfaces
         /// This method does NOT create Movie objects or perform parsing.
         /// </summary>
         /// <param name="rootPath">Root directory to scan</param>
+        /// <param name="excludedRootPath">
+        /// Optional directory tree to exclude, such as a destination nested
+        /// beneath the source directory.
+        /// </param>
         /// <returns>List of video file paths</returns>
-        List<string> GetFiles(string rootPath);
+        List<string> GetFiles(string rootPath, string? excludedRootPath = null);
     }
 }
