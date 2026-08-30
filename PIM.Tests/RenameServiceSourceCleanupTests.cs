@@ -83,6 +83,208 @@ public sealed class RenameServiceSourceCleanupTests
         }
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void LiveCommit_BlockedReviewOrError_DoesNotMoveFile(
+        bool needsReview,
+        bool hasError)
+    {
+        var fixture = CreateFixture(includeSidecar: false);
+
+        try
+        {
+            var movie = fixture.Movie;
+            movie.NeedsReview = needsReview;
+            movie.ReviewReason = needsReview ? "Manual review required" : null;
+            movie.ErrorMessage = hasError ? "Simulated error" : null;
+
+            CreateService(fixture.SourceRoot).ExecuteChanges(
+                new List<Movie> { movie },
+                dryRun: false,
+                fixture.DestinationRoot);
+
+            Assert.True(File.Exists(fixture.SourceFile));
+            Assert.False(File.Exists(movie.TargetPath!));
+            Assert.False(movie.ApprovedForCommit);
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public void LiveCommit_TargetOutsideDestinationRoot_DoesNotMoveFile()
+    {
+        var fixture = CreateFixture(includeSidecar: false);
+
+        try
+        {
+            var movie = fixture.Movie;
+            movie.TargetPath = Path.Combine(
+                fixture.Root,
+                "OutsideDestination",
+                "movie.mp4");
+
+            CreateService(fixture.SourceRoot).ExecuteChanges(
+                new List<Movie> { movie },
+                dryRun: false,
+                fixture.DestinationRoot);
+
+            Assert.True(File.Exists(fixture.SourceFile));
+            Assert.False(File.Exists(movie.TargetPath));
+            Assert.True(movie.HasError);
+            Assert.False(movie.ApprovedForCommit);
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public void LiveCommit_ExistingTargetIsNeverOverwritten()
+    {
+        var fixture = CreateFixture(includeSidecar: false);
+
+        try
+        {
+            var movie = fixture.Movie;
+            Directory.CreateDirectory(Path.GetDirectoryName(movie.TargetPath!)!);
+            File.WriteAllText(movie.TargetPath!, "existing target");
+
+            CreateService(fixture.SourceRoot).ExecuteChanges(
+                new List<Movie> { movie },
+                dryRun: false,
+                fixture.DestinationRoot);
+
+            Assert.True(File.Exists(fixture.SourceFile));
+            Assert.Equal("existing target", File.ReadAllText(movie.TargetPath!));
+            Assert.True(movie.HasDestinationConflict);
+            Assert.True(movie.NeedsReview);
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public void LiveCommit_TargetAppearingAfterDryRunIsCaught()
+    {
+        var fixture = CreateFixture(includeSidecar: false);
+
+        try
+        {
+            var service = CreateService(fixture.SourceRoot);
+            var movie = fixture.Movie;
+
+            service.ExecuteChanges(
+                new List<Movie> { movie },
+                dryRun: true,
+                fixture.DestinationRoot);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(movie.TargetPath!)!);
+            File.WriteAllText(movie.TargetPath!, "appeared after dry run");
+            movie.ApprovedForCommit = true;
+            movie.Status = "Approved by matching dry run";
+
+            service.ExecuteChanges(
+                new List<Movie> { movie },
+                dryRun: false,
+                fixture.DestinationRoot);
+
+            Assert.True(File.Exists(fixture.SourceFile));
+            Assert.Equal("appeared after dry run", File.ReadAllText(movie.TargetPath!));
+            Assert.True(movie.HasDestinationConflict);
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public void LiveCommit_MissingSourceIsHandledWithoutCreatingTarget()
+    {
+        var fixture = CreateFixture(includeSidecar: false);
+
+        try
+        {
+            File.Delete(fixture.SourceFile);
+            var movie = fixture.Movie;
+
+            CreateService(fixture.SourceRoot).ExecuteChanges(
+                new List<Movie> { movie },
+                dryRun: false,
+                fixture.DestinationRoot);
+
+            Assert.False(File.Exists(movie.TargetPath!));
+            Assert.Equal("Source File Missing", movie.Status);
+            Assert.False(movie.ApprovedForCommit);
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public void LiveCommit_SourceAndTargetSameFile_IsBlockedWithoutDataLoss()
+    {
+        var fixture = CreateFixture(includeSidecar: false);
+
+        try
+        {
+            var movie = fixture.Movie;
+            movie.TargetPath = fixture.SourceFile;
+
+            CreateService(fixture.SourceRoot).ExecuteChanges(
+                new List<Movie> { movie },
+                dryRun: false,
+                fixture.SourceRoot);
+
+            Assert.True(File.Exists(fixture.SourceFile));
+            Assert.Equal("movie", File.ReadAllText(fixture.SourceFile));
+            Assert.True(movie.HasDestinationConflict);
+            Assert.True(movie.NeedsReview);
+            Assert.False(movie.ApprovedForCommit);
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Consolidation_DuplicateSkipNeverDeletesSourceMedia()
+    {
+        var fixture = CreateFixture(includeSidecar: false);
+
+        try
+        {
+            var movie = fixture.Movie;
+            movie.IsDuplicate = true;
+            movie.KeepRecommended = false;
+            movie.ApprovedForCommit = false;
+            movie.Status = "Duplicate - Skip";
+
+            CreateService(fixture.SourceRoot).ExecuteChanges(
+                new List<Movie> { movie },
+                dryRun: false,
+                fixture.DestinationRoot);
+
+            Assert.True(File.Exists(fixture.SourceFile));
+            Assert.Equal("movie", File.ReadAllText(fixture.SourceFile));
+            Assert.False(File.Exists(movie.TargetPath!));
+        }
+        finally
+        {
+            fixture.Dispose();
+        }
+    }
+
     private static RenameService CreateService(string sourceRoot)
     {
         var configuration = new ConfigurationBuilder()

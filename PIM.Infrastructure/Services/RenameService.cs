@@ -206,6 +206,21 @@ namespace PIM.Infrastructure.Services
                             normalizedDestinationRoot,
                             movie.TargetPath);
 
+                        if (PathsEqual(
+                                movie.OriginalFilePath,
+                                movie.TargetPath))
+                        {
+                            MarkRuntimeDestinationConflict(
+                                movie,
+                                DestinationConflictResult.Conflict(
+                                    DestinationConflictType.SourceAndTargetAreSame,
+                                    "The proposed target resolves to the source file. PIM will not move a file onto itself.",
+                                    movie.TargetPath));
+                            Console.WriteLine(
+                                $"[PIM] Skipped: {displayName} - source and target are the same file.");
+                            continue;
+                        }
+
                         if (dryRun)
                         {
                             movie.Status = "Dry Run Complete";
@@ -617,6 +632,27 @@ namespace PIM.Infrastructure.Services
             {
                 throw new InvalidOperationException(
                     "The target path is outside the selected destination root.");
+            }
+        }
+
+        private static bool PathsEqual(string? firstPath, string? secondPath)
+        {
+            if (string.IsNullOrWhiteSpace(firstPath) ||
+                string.IsNullOrWhiteSpace(secondPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                return string.Equals(
+                    Path.GetFullPath(firstPath),
+                    Path.GetFullPath(secondPath),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
             }
         }
 

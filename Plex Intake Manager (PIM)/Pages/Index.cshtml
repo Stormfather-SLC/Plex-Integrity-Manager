@@ -51,9 +51,38 @@
                 <input asp-for="OutputPath" class="form-control" />
             </div>
 
-            <!-- Library Goal -->
+            <!-- Workflow policy -->
             <fieldset class="mb-3">
-                <legend class="form-label fs-6">Library Goal</legend>
+                <legend class="form-label fs-6">Workflow</legend>
+
+                <div class="form-check mb-2">
+                    <input asp-for="LibraryGoal"
+                           class="form-check-input"
+                           type="radio"
+                           id="libraryGoalOrganize"
+                           value="@PIM.Core.Models.LibraryGoal.OrganizeNewMovies" />
+                    <label class="form-check-label" for="libraryGoalOrganize">
+                        <strong>Organize New Movies</strong>
+                        <span class="badge bg-primary ms-1">Default</span><br />
+                        <span class="text-muted">
+                            @PIM.Core.Models.LibraryGoalSettings.GetDescription(PIM.Core.Models.LibraryGoal.OrganizeNewMovies)
+                        </span>
+                    </label>
+                </div>
+
+                <div class="form-check mb-2">
+                    <input asp-for="LibraryGoal"
+                           class="form-check-input"
+                           type="radio"
+                           id="libraryGoalReorganization"
+                           value="@PIM.Core.Models.LibraryGoal.ReorganizationMigration" />
+                    <label class="form-check-label" for="libraryGoalReorganization">
+                        <strong>Reorganize / Migrate</strong><br />
+                        <span class="text-muted">
+                            @PIM.Core.Models.LibraryGoalSettings.GetDescription(PIM.Core.Models.LibraryGoal.ReorganizationMigration)
+                        </span>
+                    </label>
+                </div>
 
                 <div class="form-check mb-2">
                     <input asp-for="LibraryGoal"
@@ -62,23 +91,9 @@
                            id="libraryGoalConsolidation"
                            value="@PIM.Core.Models.LibraryGoal.Consolidation" />
                     <label class="form-check-label" for="libraryGoalConsolidation">
-                        <strong>Consolidation</strong><br />
+                        <strong>Consolidate &amp; Save Space</strong><br />
                         <span class="text-muted">
                             @PIM.Core.Models.LibraryGoalSettings.GetDescription(PIM.Core.Models.LibraryGoal.Consolidation)
-                        </span>
-                    </label>
-                </div>
-
-                <div class="form-check">
-                    <input asp-for="LibraryGoal"
-                           class="form-check-input"
-                           type="radio"
-                           id="libraryGoalReorganization"
-                           value="@PIM.Core.Models.LibraryGoal.ReorganizationMigration" />
-                    <label class="form-check-label" for="libraryGoalReorganization">
-                        <strong>Reorganization / Migration</strong><br />
-                        <span class="text-muted">
-                            @PIM.Core.Models.LibraryGoalSettings.GetDescription(PIM.Core.Models.LibraryGoal.ReorganizationMigration)
                         </span>
                     </label>
                 </div>
@@ -183,7 +198,13 @@
 <div style="margin-bottom:20px; padding:12px; border:1px solid #ccc;">
 
     <div style="margin-bottom:10px;">
-        <strong>Workflow:</strong>
+        <strong>Selected Workflow:</strong>
+        <span class="badge bg-dark ms-1">
+            @PIM.Core.Models.LibraryGoalSettings.GetDisplayName(Model.LibraryGoal)
+        </span>
+        <div class="text-muted mt-1" style="font-size:0.9em;">
+            @PIM.Core.Models.LibraryGoalSettings.GetDescription(Model.LibraryGoal)
+        </div>
     </div>
 
     <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
@@ -279,7 +300,7 @@
                 <br />
                 <strong>Total Previewed Files:</strong> @Model.DryRunPreview.TotalFiles
                 <br />
-                <strong>Library Goal:</strong>
+                <strong>Workflow:</strong>
                 @PIM.Core.Models.LibraryGoalSettings.GetDisplayName(Model.DryRunPreview.LibraryGoal)
             </p>
 
@@ -402,6 +423,35 @@
 
                                 <td>
                                     <div>@item.Status</div>
+
+                                    @if (item.NeedsReview)
+                                    {
+                                        <div class="alert alert-primary mt-2 mb-0 p-2" style="font-size:0.85em;">
+                                            <div class="fw-bold">Execution blocked — review required</div>
+                                            <div><strong>Parsed identity:</strong> @item.ParsedTitle (@(item.ParsedYear?.ToString() ?? "year unknown"))</div>
+                                            <div><strong>IMDb ID:</strong> @(string.IsNullOrWhiteSpace(item.ParsedImdbId) ? "Not determined" : item.ParsedImdbId)</div>
+                                            <div><strong>Edition:</strong> @(string.IsNullOrWhiteSpace(item.Edition) ? "Standard" : item.Edition)</div>
+                                            @if (item.MetadataConfidence.HasValue)
+                                            {
+                                                <div><strong>Metadata confidence:</strong> @item.MetadataConfidence.Value.ToString("0")%</div>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(item.MetadataFailureDetail))
+                                            {
+                                                <div><strong>Metadata diagnostic:</strong> @item.MetadataFailureDetail</div>
+                                            }
+                                            @if (item.HasMetadataSuggestion)
+                                            {
+                                                <div class="mt-1">
+                                                    <strong>Suggested match:</strong>
+                                                    @item.SuggestedTitle (@item.SuggestedYear) — @item.SuggestedImdbId
+                                                </div>
+                                            }
+                                            @if (item.IsDuplicate)
+                                            {
+                                                <div><strong>Duplicate decision:</strong> @(item.KeepRecommended ? "Recommended copy" : "Not selected as the preferred copy")</div>
+                                            }
+                                        </div>
+                                    }
 
                                     @if (item.HasDestinationConflict)
                                     {
@@ -609,7 +659,7 @@
                                     }
                                     else if (movie.IsDuplicate)
                                     {
-                                        <span>🗑 Duplicate</span>
+                                        <span>⏭ Duplicate to Skip</span>
                                     }
                                     else
                                     {
@@ -640,7 +690,7 @@
                                     }
                                     else if (movie.IsDuplicate)
                                     {
-                                        <span style="color:#8a4b00;">Delete</span>
+                                        <span style="color:#8a4b00;">Skip (no deletion)</span>
                                     }
                                     else
                                     {
@@ -651,9 +701,51 @@
                                 <td>
                                     @if (movie.NeedsReview)
                                     {
-                                        <span style="font-size:0.8em; color:#004085;">
-                                            @movie.ReviewReason
-                                        </span>
+                                        <div class="alert alert-primary mb-1 p-2" style="font-size:0.8em;">
+                                            <div class="fw-bold">Execution blocked</div>
+                                            <div><strong>Reason:</strong> @movie.ReviewReason</div>
+                                            <div><strong>Source:</strong> <span class="text-break">@movie.OriginalFilePath</span></div>
+                                            <div><strong>Parsed identity:</strong> @movie.Title (@(movie.Year?.ToString() ?? "year unknown"))</div>
+                                            <div><strong>IMDb ID:</strong> @(string.IsNullOrWhiteSpace(movie.ImdbId) ? "Not determined" : movie.ImdbId)</div>
+                                            <div><strong>Edition:</strong> @(string.IsNullOrWhiteSpace(movie.VersionTag) ? "Standard" : movie.VersionTag)</div>
+                                            @if (movie.MatchConfidence.HasValue)
+                                            {
+                                                <div><strong>Metadata confidence:</strong> @movie.MatchConfidence.Value.ToString("0")%</div>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(movie.MetadataLookupFailureDetail))
+                                            {
+                                                <div><strong>Metadata diagnostic:</strong> @movie.MetadataLookupFailureDetail</div>
+                                            }
+                                            @if (movie.IsDuplicate)
+                                            {
+                                                <div><strong>Duplicate decision:</strong> @(movie.KeepRecommended ? "Recommended copy" : "Not selected as the preferred copy")</div>
+                                            }
+                                            @if (movie.HasDestinationConflict && !string.IsNullOrWhiteSpace(movie.ExistingDestinationPath))
+                                            {
+                                                <div><strong>Existing destination:</strong> <span class="text-break">@movie.ExistingDestinationPath</span></div>
+                                            }
+                                            @if (movie.HasPlexLibraryConflict && !string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath))
+                                            {
+                                                <div><strong>Existing Plex path:</strong> <span class="text-break">@movie.ExistingPlexLibraryPath</span></div>
+                                            }
+                                            @if (movie.HasMetadataSuggestion)
+                                            {
+                                                <div class="mt-2 p-2 bg-light border rounded">
+                                                    <div>
+                                                        <strong>Suggested match:</strong>
+                                                        @movie.SuggestedTitle (@movie.SuggestedYear) — @movie.SuggestedImdbId
+                                                    </div>
+                                                    <form method="post" asp-page-handler="AcceptSuggestedMatch" class="mt-1">
+                                                        @Html.AntiForgeryToken()
+                                                        <input type="hidden" name="movieId" value="@movie.Id" />
+                                                        <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
+                                                        <button type="submit" class="btn btn-sm btn-primary">
+                                                            Accept Suggested Match
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            }
+                                        </div>
                                     }
 
                                     @if (movie.IsPlexTrackedMigration)

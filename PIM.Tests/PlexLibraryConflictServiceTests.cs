@@ -374,6 +374,7 @@ public sealed class PlexLibraryConflictServiceTests
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
+            Assert.Equal(HttpMethod.Get, request.Method);
             return Task.FromResult(_handler(request));
         }
     }

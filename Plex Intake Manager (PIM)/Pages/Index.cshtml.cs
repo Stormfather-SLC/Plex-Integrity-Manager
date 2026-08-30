@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -25,15 +23,16 @@ namespace PIM.Web.Pages
         private readonly IFileScanner _scanner;
         private readonly IFileNameParser _parser;
         private readonly IMetadataService _metadata;
-        private readonly IDuplicateService _duplicates;
         private readonly IRenameService _rename;
         private readonly IConfiguration _config;
         private readonly IMemoryCache _cache;
         private readonly ScanProgress _progress;
         private readonly PreviewTreeService _treeService;
         private readonly IDryRunPreviewService _dryRunPreviewService;
-        private readonly IMovieConflictDetectionService _conflictDetection;
         private readonly IDestinationProfileStore _profileStore;
+        private readonly IMoviePlanService _moviePlan;
+        private readonly ILogger<IndexModel> _logger;
+        private readonly IMetadataSuggestionService _metadataSuggestion;
 
         [BindProperty(SupportsGet = true)]
         public bool ShowOnlyRecommended { get; set; }
@@ -49,7 +48,7 @@ namespace PIM.Web.Pages
 
         [BindProperty]
         public LibraryGoal LibraryGoal { get; set; } =
-            LibraryGoal.Consolidation;
+            LibraryGoal.OrganizeNewMovies;
 
         public List<Movie> Movies { get; set; } = new();
 
@@ -63,28 +62,30 @@ namespace PIM.Web.Pages
             IFileScanner scanner,
             IFileNameParser parser,
             IMetadataService metadata,
-            IDuplicateService duplicates,
             IRenameService rename,
             IConfiguration config,
             IMemoryCache cache,
             ScanProgress progress,
             PreviewTreeService treeService,
             IDryRunPreviewService dryRunPreviewService,
-            IMovieConflictDetectionService conflictDetection,
-            IDestinationProfileStore profileStore)
+            IDestinationProfileStore profileStore,
+            IMoviePlanService moviePlan,
+            IMetadataSuggestionService metadataSuggestion,
+            ILogger<IndexModel> logger)
         {
             _scanner = scanner;
             _parser = parser;
             _metadata = metadata;
-            _duplicates = duplicates;
             _rename = rename;
             _config = config;
             _cache = cache;
             _progress = progress;
             _treeService = treeService;
             _dryRunPreviewService = dryRunPreviewService;
-            _conflictDetection = conflictDetection;
             _profileStore = profileStore;
+            _moviePlan = moviePlan;
+            _metadataSuggestion = metadataSuggestion;
+            _logger = logger;
         }
 
         public Task OnGetAsync(bool showOnlyRecommended = false)
@@ -130,6 +131,9 @@ namespace PIM.Web.Pages
             ResetProgress();
             _progress.IsRunning = true;
 
+            _logger.LogInformation(
+                "Movie scan started for the configured source with destination exclusion enabled.");
+
             _ = Task.Run(() =>
             {
                 try
@@ -162,6 +166,15 @@ namespace PIM.Web.Pages
                     }
 
                     SetCachedMovies(movies);
+                    _logger.LogInformation(
+                        "Movie scan completed with {MovieCount} discovered movie file(s).",
+                        movies.Count);
+                }
+                catch (Exception ex)
+                {
+                    _progress.Message =
+                        "Movie scan failed. Review the application log for details.";
+                    _logger.LogError(ex, "Movie scan failed.");
                 }
                 finally
                 {
@@ -180,6 +193,11 @@ namespace PIM.Web.Pages
             var profile = _profileStore.GetActiveProfile();
             var sourceRoot = _config["PIM:ScanPath"] ?? string.Empty;
             var libraryGoal = GetConfiguredLibraryGoal();
+
+            _logger.LogInformation(
+                "Movie identification started for {MovieCount} movie(s) using workflow {Workflow}.",
+                movies.Count,
+                LibraryGoalSettings.GetDisplayName(libraryGoal));
 
             if (string.IsNullOrWhiteSpace(profile.DestinationRoot))
             {
@@ -202,21 +220,20 @@ namespace PIM.Web.Pages
 
                 _progress.CurrentFile = "Checking duplicates and destination conflicts...";
 
-                _conflictDetection.ClearConflictState(movies);
-                _duplicates.Process(movies);
-                _rename.GeneratePreview(movies, profile, sourceRoot);
-
                 _progress.CurrentFile = "Checking Plex library conflicts...";
-
-                _conflictDetection.ApplyConflictDetection(
+                _moviePlan.Rebuild(
                     movies,
-                    profile.DestinationRoot,
+                    profile,
                     sourceRoot,
                     libraryGoal);
 
                 _progress.CurrentFile = "Saving identification results...";
                 SetCachedMovies(movies);
                 InvalidateDryRunApproval();
+                _logger.LogInformation(
+                    "Movie identification and planning completed with {ReviewCount} review item(s) and {ErrorCount} error(s).",
+                    movies.Count(movie => movie.NeedsReview),
+                    movies.Count(movie => movie.HasError));
             }
             finally
             {
@@ -226,6 +243,72 @@ namespace PIM.Web.Pages
                 // while conflict detection is still running.
                 ResetProgress(isRunning: false);
             }
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
+        }
+
+        public async Task<IActionResult> OnPostAcceptSuggestedMatchAsync(Guid movieId)
+        {
+            InvalidateDryRunApproval();
+
+            if (!TryGetCachedMovies(out var movies))
+            {
+                TempData["Message"] = "The scan is no longer available. Scan the source folder again.";
+                return RedirectToPage();
+            }
+
+            var movie = movies.SingleOrDefault(candidate => candidate.Id == movieId);
+
+            if (movie == null || !movie.HasMetadataSuggestion)
+            {
+                TempData["Message"] =
+                    "No concrete metadata suggestion is available for that movie.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            var selectedTitle = movie.SuggestedTitle!;
+            var selectedYear = movie.SuggestedYear!.Value;
+            var selectedImdbId = movie.SuggestedImdbId!;
+
+            _logger.LogInformation(
+                "User accepted suggested metadata identity {Title} ({Year}), IMDb {ImdbId}, for {FileName}; invalidating prior dry-run approval and rebuilding the plan.",
+                selectedTitle,
+                selectedYear,
+                selectedImdbId,
+                movie.FileName ?? "<unknown>");
+
+            var profile = _profileStore.GetActiveProfile();
+            var sourceRoot = _config["PIM:ScanPath"] ?? string.Empty;
+            var libraryGoal = GetConfiguredLibraryGoal();
+
+            var accepted = await _metadataSuggestion.AcceptAsync(
+                movie,
+                movies,
+                profile,
+                sourceRoot,
+                libraryGoal);
+
+            if (!accepted)
+            {
+                TempData["Message"] =
+                    "The metadata suggestion was no longer available. No identity was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            SetCachedMovies(movies);
+
+            TempData["Message"] = movie.NeedsReview || movie.HasError
+                ? $"Suggested match applied for '{movie.FileName}', but the item remains blocked: {movie.ReviewReason ?? movie.ErrorMessage ?? movie.Status}."
+                : $"Suggested match applied for '{movie.FileName}'. The downstream plan was rebuilt; run a new dry run before live commit.";
 
             return RedirectToPage(new
             {
@@ -244,6 +327,13 @@ namespace PIM.Web.Pages
             var profile = _profileStore.GetActiveProfile();
             var sourceRoot = _config["PIM:ScanPath"] ?? string.Empty;
             var libraryGoal = GetConfiguredLibraryGoal();
+
+            _logger.LogInformation(
+                "{Operation} started for workflow {Workflow} and profile {ProfileName} revision {ProfileRevision}.",
+                DryRun ? "Dry run" : "Live commit",
+                LibraryGoalSettings.GetDisplayName(libraryGoal),
+                profile.Name,
+                profile.Revision);
 
             if (string.IsNullOrWhiteSpace(profile.DestinationRoot))
             {
@@ -269,12 +359,9 @@ namespace PIM.Web.Pages
 
             // Rebuild the exact current plan immediately before either a dry run
             // or a live commit. This catches profile edits and destination changes.
-            _conflictDetection.ClearConflictState(movies);
-            _duplicates.Process(movies);
-            _rename.GeneratePreview(movies, profile, sourceRoot);
-            _conflictDetection.ApplyConflictDetection(
+            _moviePlan.Rebuild(
                 movies,
-                profile.DestinationRoot,
+                profile,
                 sourceRoot,
                 libraryGoal);
             SetCachedMovies(movies);
@@ -286,7 +373,7 @@ namespace PIM.Web.Pages
                     !movie.HasError)
                 .ToList();
 
-            var currentPlanFingerprint = BuildPlanFingerprint(
+            var currentPlanFingerprint = PlanFingerprintBuilder.Build(
                 movies,
                 profile,
                 libraryGoal);
@@ -299,6 +386,9 @@ namespace PIM.Web.Pages
                 TempData["Message"] =
                     "No files were moved. The current destination plan does not have a matching dry-run approval. " +
                     "Run a new dry run, review the results, and then return to live commit.";
+
+                _logger.LogWarning(
+                    "Live commit rejected because the current plan did not match the approved dry run.");
 
                 return RedirectToPage(new
                 {
@@ -335,7 +425,7 @@ namespace PIM.Web.Pages
 
                 TempData["Message"] =
                     $"Dry Run Complete using '{profile.Name}': " +
-                    $"Library Goal: {LibraryGoalSettings.GetDisplayName(libraryGoal)}. " +
+                    $"Workflow: {LibraryGoalSettings.GetDisplayName(libraryGoal)}. " +
                     $"{summary.MoveCount} files would be moved, " +
                     $"{summary.DuplicateSkipCount} duplicates would be skipped, " +
                     $"{summary.ReviewCount} need review, " +
@@ -347,7 +437,7 @@ namespace PIM.Web.Pages
 
                 TempData["Message"] =
                     $"Changes Applied using '{profile.Name}': " +
-                    $"Library Goal: {LibraryGoalSettings.GetDisplayName(libraryGoal)}. " +
+                    $"Workflow: {LibraryGoalSettings.GetDisplayName(libraryGoal)}. " +
                     $"{summary.MoveCount} files processed, " +
                     $"{summary.DuplicateSkipCount} duplicates skipped, " +
                     $"{summary.ReviewCount} need review, " +
@@ -380,7 +470,7 @@ namespace PIM.Web.Pages
                     throw new InvalidOperationException("A destination folder is required.");
 
                 if (!Enum.IsDefined(LibraryGoal))
-                    throw new InvalidOperationException("A valid Library Goal is required.");
+                    throw new InvalidOperationException("A valid workflow is required.");
 
                 var delayMs = _config.GetValue<int>(
                     "PIM:MetadataDelayMs",
@@ -427,43 +517,34 @@ namespace PIM.Web.Pages
                 profile.DestinationRoot = OutputPath;
                 _profileStore.Save(profile);
 
-                var sourceChanged = !string.Equals(
-                    previousScanPath.Trim(),
+                var settingsChange = WorkflowSettingsChange.Evaluate(
+                    previousScanPath,
                     ScanPath,
-                    StringComparison.OrdinalIgnoreCase);
-                var outputChanged = !PathsEqual(
                     previousOutputPath,
-                    OutputPath);
-                var libraryGoalChanged = previousLibraryGoal != LibraryGoal;
+                    OutputPath,
+                    previousLibraryGoal,
+                    LibraryGoal);
 
-                if (sourceChanged)
+                if (settingsChange.ClearScan)
                 {
                     _cache.Remove(MovieScanCacheKey);
                     ResetProgress();
                 }
-                else if ((outputChanged || libraryGoalChanged) &&
+                else if (settingsChange.RebuildExistingPlan &&
                          TryGetCachedMovies(out var cachedMovies))
                 {
-                    // Keep the scan and enriched identity data. Remove only the
-                    // transient findings affected by changed policy inputs. The
-                    // redirected GET rebuilds the plan and independently checks
-                    // destination and Plex state against the current settings.
-                    if (outputChanged)
-                    {
-                        _conflictDetection.ClearDestinationConflictState(
-                            cachedMovies);
-                    }
-
-                    if (libraryGoalChanged)
-                    {
-                        _conflictDetection.ClearPlexConflictState(cachedMovies);
-                    }
-
+                    // Keep the scan and completed metadata. Rebuild only the
+                    // duplicate/path/conflict policy affected by these settings.
+                    _moviePlan.Rebuild(
+                        cachedMovies,
+                        profile,
+                        ScanPath,
+                        LibraryGoal);
                     SetCachedMovies(cachedMovies);
                 }
 
                 InvalidateDryRunApproval();
-                TempData["Message"] = sourceChanged
+                TempData["Message"] = settingsChange.SourceChanged
                     ? "Library settings were saved. The previous scan was cleared because the source folder changed."
                     : "Library settings and the active destination profile were saved.";
             }
@@ -508,22 +589,18 @@ namespace PIM.Web.Pages
                 return;
             }
 
-            var planUsesDifferentProfile = cachedMovies.Any(movie =>
+            var planInputsChanged = cachedMovies.Any(movie =>
                 !string.IsNullOrWhiteSpace(movie.TargetPath) &&
                 (movie.DestinationProfileId != ActiveDestinationProfile.Id ||
-                 movie.DestinationProfileRevision != ActiveDestinationProfile.Revision));
+                 movie.DestinationProfileRevision != ActiveDestinationProfile.Revision ||
+                 movie.PlannedLibraryGoal != LibraryGoal));
 
-            if (planUsesDifferentProfile &&
+            if (planInputsChanged &&
                 !string.IsNullOrWhiteSpace(ActiveDestinationProfile.DestinationRoot))
             {
-                _conflictDetection.ClearConflictState(cachedMovies);
-                _rename.GeneratePreview(
+                _moviePlan.Rebuild(
                     cachedMovies,
                     ActiveDestinationProfile,
-                    ScanPath);
-                _conflictDetection.ApplyConflictDetection(
-                    cachedMovies,
-                    ActiveDestinationProfile.DestinationRoot,
                     ScanPath,
                     LibraryGoal);
 
@@ -672,81 +749,19 @@ namespace PIM.Web.Pages
             LibraryGoal libraryGoal)
         {
             return _cache.TryGetValue(
-                       DryRunApprovalCacheKey,
-                       out DryRunApproval? approval) &&
+                   DryRunApprovalCacheKey,
+                   out DryRunApproval? approval) &&
                    approval != null &&
-                   approval.ProfileId == profile.Id &&
-                   approval.ProfileRevision == profile.Revision &&
-                   approval.LibraryGoal == libraryGoal &&
-                   string.Equals(
-                       approval.PlanFingerprint,
-                       currentPlanFingerprint,
-                       StringComparison.Ordinal);
+                   approval.Matches(
+                       profile,
+                       libraryGoal,
+                       currentPlanFingerprint);
         }
 
         private void InvalidateDryRunApproval()
         {
             _cache.Remove(DryRunPreviewCacheKey);
             _cache.Remove(DryRunApprovalCacheKey);
-        }
-
-        private static string BuildPlanFingerprint(
-            IEnumerable<Movie> movies,
-            DestinationProfile profile,
-            LibraryGoal libraryGoal)
-        {
-            var planLines = movies
-                .OrderBy(movie => movie.Id)
-                .Select(movie => string.Join(
-                    '|',
-                    movie.Id.ToString("N"),
-                    movie.TargetPath ?? string.Empty,
-                    movie.ApprovedForCommit,
-                    movie.NeedsReview,
-                    movie.HasError,
-                    movie.HasDestinationConflict,
-                    movie.HasPlexLibraryConflict,
-                    movie.IsPlexTrackedMigration));
-
-            var payload = string.Join(
-                Environment.NewLine,
-                new[]
-                {
-                    profile.Id.ToString("N"),
-                    profile.Revision.ToString(),
-                    profile.DestinationRoot,
-                    libraryGoal.ToString()
-                }.Concat(planLines));
-
-            return Convert.ToHexString(
-                SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
-        }
-
-        private static bool PathsEqual(string firstPath, string secondPath)
-        {
-            try
-            {
-                var firstFullPath = Path.GetFullPath(firstPath)
-                    .TrimEnd(
-                        Path.DirectorySeparatorChar,
-                        Path.AltDirectorySeparatorChar);
-                var secondFullPath = Path.GetFullPath(secondPath)
-                    .TrimEnd(
-                        Path.DirectorySeparatorChar,
-                        Path.AltDirectorySeparatorChar);
-
-                return string.Equals(
-                    firstFullPath,
-                    secondFullPath,
-                    StringComparison.OrdinalIgnoreCase);
-            }
-            catch
-            {
-                return string.Equals(
-                    firstPath.Trim(),
-                    secondPath.Trim(),
-                    StringComparison.OrdinalIgnoreCase);
-            }
         }
 
         private LibraryGoal GetConfiguredLibraryGoal()
@@ -776,13 +791,6 @@ namespace PIM.Web.Pages
                 reviewCount,
                 errorCount);
         }
-
-        private sealed record DryRunApproval(
-            Guid ProfileId,
-            int ProfileRevision,
-            LibraryGoal LibraryGoal,
-            string PlanFingerprint,
-            DateTime CreatedUtc);
 
         private sealed record CommitSummary(
             int MoveCount,

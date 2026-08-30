@@ -14,6 +14,6 @@ namespace PIM.Core.Interfaces
             List<Movie> movies,
             string outputPath,
             string? sourceRoot = null,
-            LibraryGoal libraryGoal = LibraryGoal.Consolidation);
+            LibraryGoal libraryGoal = LibraryGoal.OrganizeNewMovies);
     }
 }

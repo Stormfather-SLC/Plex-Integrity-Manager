@@ -7,7 +7,7 @@ public class DryRunPreviewService : IDryRunPreviewService
 {
     public DryRunPreviewResult BuildPreview(
         IEnumerable<Movie> movies,
-        LibraryGoal libraryGoal = LibraryGoal.Consolidation)
+        LibraryGoal libraryGoal = LibraryGoal.OrganizeNewMovies)
     {
         var result = new DryRunPreviewResult
         {
@@ -52,6 +52,17 @@ public class DryRunPreviewService : IDryRunPreviewService
             OriginalFilePath = movie.OriginalFilePath ?? string.Empty,
             TargetPath = movie.TargetPath ?? string.Empty,
             Status = movie.Status ?? string.Empty,
+            ReviewReason = movie.ReviewReason ?? string.Empty,
+            ParsedTitle = movie.Title ?? string.Empty,
+            ParsedYear = movie.Year,
+            ParsedImdbId = movie.ImdbId ?? string.Empty,
+            Edition = movie.VersionTag ?? string.Empty,
+            MetadataConfidence = movie.MatchConfidence,
+            MetadataReviewReason = movie.MetadataReviewReason ?? string.Empty,
+            MetadataFailureDetail = movie.MetadataLookupFailureDetail ?? string.Empty,
+            SuggestedTitle = movie.SuggestedTitle ?? string.Empty,
+            SuggestedYear = movie.SuggestedYear,
+            SuggestedImdbId = movie.SuggestedImdbId ?? string.Empty,
             IsDuplicate = movie.IsDuplicate,
             KeepRecommended = movie.KeepRecommended,
             NeedsReview = movie.NeedsReview,
@@ -73,14 +84,6 @@ public class DryRunPreviewService : IDryRunPreviewService
         {
             item.Action = "Needs Review";
             item.Status = movie.ReviewReason ?? "Review required before commit";
-
-            // For normal review rows, TargetPath may not be useful or safe.
-            // For conflict rows, keep the proposed target visible so the user can
-            // compare it against the existing destination/Plex path.
-            if (!item.HasPathComparisonContext)
-            {
-                item.TargetPath = string.Empty;
-            }
 
             item.CssClass = "dryrun-review";
         }

@@ -83,7 +83,12 @@ namespace PIM.Infrastructure.Services
             }
 
             if (PathsEqual(targetPath, movie.OriginalFilePath))
-                return DestinationConflictResult.NoConflict();
+            {
+                return DestinationConflictResult.Conflict(
+                    DestinationConflictType.SourceAndTargetAreSame,
+                    "The proposed target resolves to the source file. PIM will not move a file onto itself.",
+                    targetPath);
+            }
 
             if (File.Exists(targetPath))
             {
