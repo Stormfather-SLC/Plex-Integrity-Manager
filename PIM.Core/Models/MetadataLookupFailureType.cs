@@ -13,5 +13,8 @@ public enum MetadataLookupFailureType
     Timeout,
     MalformedResponse,
     MissingRequiredFields,
-    LowConfidence
+    LowConfidence,
+    FuzzyCandidateNeedsReview,
+    AmbiguousFuzzyCandidates,
+    FuzzyCandidateYearConflict
 }

@@ -75,4 +75,20 @@ public sealed class FileNameParserTests
         Assert.Equal(2021, movie.Year);
         Assert.Equal("Edited", movie.VersionTag);
     }
+
+    [Fact]
+    public void Parse_MultipleEditionMarkers_RemovesAllMarkersFromLookupTitle()
+    {
+        var movie = new Movie
+        {
+            FileName = "Gladiator 2000 - Edited - Extended.mp4"
+        };
+
+        _parser.Parse(movie);
+
+        Assert.Equal("Gladiator", movie.Title);
+        Assert.Equal(2000, movie.Year);
+        Assert.True(movie.IsAlternateVersion);
+        Assert.Equal("Edited + Extended Edition", movie.VersionTag);
+    }
 }

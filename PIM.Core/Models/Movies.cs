@@ -140,6 +140,9 @@ namespace PIM.Core.Models
                        "Low confidence metadata match",
                        StringComparison.OrdinalIgnoreCase) ||
                    reason.StartsWith(
+                       "Possible OMDb match:",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   reason.StartsWith(
                        "OMDb lookup failed:",
                        StringComparison.OrdinalIgnoreCase) ||
                    reason.StartsWith(
@@ -226,6 +229,10 @@ namespace PIM.Core.Models
         // =========================================================
 
         public string? SuggestedTitle { get; set; }
+
+        public int? SuggestedYear { get; set; }
+
+        public string? SuggestedImdbId { get; set; }
 
         public double? MatchConfidence { get; set; }
 
