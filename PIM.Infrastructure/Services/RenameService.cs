@@ -55,7 +55,11 @@ namespace PIM.Infrastructure.Services
                 if (!IsValidForRename(movie))
                 {
                     ClearTarget(movie);
-                    movie.RequireReview("Missing required metadata for rename");
+                    if (!movie.HasMetadataReviewReason)
+                    {
+                        movie.RequireReview("Missing required metadata for rename");
+                    }
+
                     movie.Status = movie.ReviewReason ?? "Missing required metadata for rename";
                     movie.ApprovedForCommit = false;
                     continue;

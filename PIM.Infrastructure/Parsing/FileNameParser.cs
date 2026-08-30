@@ -69,21 +69,48 @@ namespace PIM.Infrastructure.Parsing
                 { @"\bIMAX\b", "IMAX" }
             };
 
+            var detectedVersions = versionPatterns
+                .SelectMany(pattern => Regex.Matches(
+                        name,
+                        pattern.Key,
+                        RegexOptions.IgnoreCase)
+                    .Cast<Match>()
+                    .Select(match => new
+                    {
+                        match.Index,
+                        match.Length,
+                        Tag = pattern.Value
+                    }))
+                .OrderBy(version => version.Index)
+                .ThenByDescending(version => version.Length)
+                .ToList();
+
+            var nonOverlappingVersions = detectedVersions
+                .Where((version, index) => !detectedVersions
+                    .Take(index)
+                    .Any(previous =>
+                        version.Index < previous.Index + previous.Length &&
+                        previous.Index < version.Index + version.Length))
+                .ToList();
+
             foreach (var pattern in versionPatterns)
             {
-                if (!Regex.IsMatch(name, pattern.Key, RegexOptions.IgnoreCase))
-                    continue;
-
-                movie.VersionTag = pattern.Value;
-                movie.IsAlternateVersion = true;
-
                 cleaned = Regex.Replace(
                     cleaned,
                     pattern.Key,
                     " ",
                     RegexOptions.IgnoreCase);
+            }
 
-                break;
+            var versionTags = nonOverlappingVersions
+                .Select(version => version.Tag)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (versionTags.Count > 0)
+            {
+                movie.VersionTag = string.Join(" + ", versionTags);
+                movie.IsAlternateVersion = true;
             }
 
             // =========================================================
@@ -138,6 +165,20 @@ namespace PIM.Infrastructure.Parsing
             cleaned = Regex.Replace(cleaned, @"\[\s*\]", " ");
             cleaned = Regex.Replace(cleaned, @"\{\s*\}", " ");
             cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
+
+            // Normalize library-style trailing articles into the title form
+            // expected by OMDb: "Matrix Resurrections, The" becomes
+            // "The Matrix Resurrections".
+            var trailingArticle = Regex.Match(
+                cleaned,
+                @"^(.+),\s*(The|A|An)$",
+                RegexOptions.IgnoreCase);
+
+            if (trailingArticle.Success)
+            {
+                cleaned =
+                    $"{trailingArticle.Groups[2].Value} {trailingArticle.Groups[1].Value}";
+            }
 
             movie.Title = cleaned;
         }

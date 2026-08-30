@@ -3,6 +3,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 
@@ -10,14 +12,23 @@ namespace PIM.Infrastructure.Metadata
 {
     public class OmdbMetadataService : IMetadataService
     {
+        private const double MinimumFuzzyTitleSimilarity = 0.78;
+        private const double MinimumSuggestedTitleSimilarity = 0.65;
+        private const double MinimumAutomaticFuzzyConfidence = 85;
+        private const double MinimumWinnerMargin = 8;
+        private const int MaximumSearchPages = 2;
+
         private readonly HttpClient _httpClient;
         private readonly string _apiKey;
+        private readonly ILogger<OmdbMetadataService> _logger;
 
         public OmdbMetadataService(
             HttpClient httpClient,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            ILogger<OmdbMetadataService>? logger = null)
         {
             _httpClient = httpClient;
+            _logger = logger ?? NullLogger<OmdbMetadataService>.Instance;
 
             _apiKey = configuration["Omdb:ApiKey"]?.Trim()
                 ?? throw new InvalidOperationException(
@@ -33,13 +44,28 @@ namespace PIM.Infrastructure.Metadata
 
         public async Task EnrichAsync(Movie movie)
         {
+            ArgumentNullException.ThrowIfNull(movie);
+
+            movie.ClearMetadataReviewReasons();
+            movie.SuggestedTitle = null;
+            movie.SuggestedYear = null;
+            movie.SuggestedImdbId = null;
+            movie.IsFuzzyMatch = false;
+
             var parsedTitle = movie.Title;
             var parsedYear = movie.Year;
             var originalImdbId = movie.ImdbId;
             var hasImdbId = !string.IsNullOrWhiteSpace(originalImdbId);
 
             if (!hasImdbId && string.IsNullOrWhiteSpace(parsedTitle))
+            {
+                MarkLookupFailure(
+                    movie,
+                    MetadataLookupFailureType.MissingLookupInput,
+                    "A title or IMDb ID is required to query OMDb.",
+                    "OMDb lookup not attempted: title and IMDb ID are missing");
                 return;
+            }
 
             var url = hasImdbId
                 ? $"https://www.omdbapi.com/?i={Uri.EscapeDataString(originalImdbId!)}"
@@ -50,56 +76,507 @@ namespace PIM.Infrastructure.Metadata
 
             url += $"&type=movie&apikey={_apiKey}";
 
-            Console.WriteLine(hasImdbId
-                ? $"OMDb Lookup by IMDb ID: IMDb='{originalImdbId}', ParsedTitle='{parsedTitle}', ParsedYear='{parsedYear}'"
-                : $"OMDb Lookup by Title: Title='{parsedTitle}', Year='{parsedYear}'");
-
-            HttpResponseMessage response;
+            _logger.LogInformation(
+                "Starting OMDb {LookupType} lookup for title '{Title}' and year '{Year}'.",
+                hasImdbId ? "IMDb ID" : "title/year",
+                parsedTitle,
+                parsedYear);
 
             try
             {
-                response = await _httpClient.GetAsync(url);
-            }
-            catch (Exception ex) when (
-                ex is HttpRequestException ||
-                ex is TaskCanceledException)
-            {
-                if (hasImdbId)
-                    MarkImdbLookupFailure(movie);
+                using var response = await _httpClient.GetAsync(url);
 
+                if (!response.IsSuccessStatusCode)
+                {
+                    var statusDetail = $"HTTP {(int)response.StatusCode}";
+                    var reasonPhrase = SanitizeDiagnostic(response.ReasonPhrase);
+
+                    if (!string.IsNullOrWhiteSpace(reasonPhrase))
+                        statusDetail += $" ({reasonPhrase})";
+
+                    MarkLookupFailure(
+                        movie,
+                        MetadataLookupFailureType.HttpFailure,
+                        statusDetail,
+                        $"OMDb lookup failed: {statusDetail}");
+                    return;
+                }
+
+                string json;
+
+                try
+                {
+                    json = await response.Content.ReadAsStringAsync();
+                }
+                catch (TaskCanceledException)
+                {
+                    MarkTimeoutFailure(movie);
+                    return;
+                }
+                catch (Exception ex) when (
+                    ex is HttpRequestException ||
+                    ex is IOException)
+                {
+                    MarkNetworkFailure(movie);
+                    return;
+                }
+
+                OmdbResponse? data;
+
+                try
+                {
+                    data = JsonSerializer.Deserialize<OmdbResponse>(json);
+                }
+                catch (Exception ex) when (
+                    ex is JsonException ||
+                    ex is NotSupportedException)
+                {
+                    MarkMalformedResponse(movie);
+                    return;
+                }
+
+                if (data == null ||
+                    string.IsNullOrWhiteSpace(data.Response))
+                {
+                    MarkMalformedResponse(movie);
+                    return;
+                }
+
+                if (data.Response.Equals(
+                        "False",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!hasImdbId &&
+                        ClassifyOmdbFailure(data.Error) ==
+                        MetadataLookupFailureType.MovieNotFound)
+                    {
+                        await TryFuzzyFallbackAsync(
+                            movie,
+                            parsedTitle!,
+                            parsedYear,
+                            data.Error);
+                        return;
+                    }
+
+                    MarkOmdbFailure(movie, data.Error);
+                    return;
+                }
+
+                if (!data.Response.Equals(
+                        "True",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    MarkMalformedResponse(movie);
+                    return;
+                }
+
+                ApplySuccessfulResponse(
+                    movie,
+                    data,
+                    parsedTitle,
+                    parsedYear,
+                    originalImdbId,
+                    hasImdbId,
+                    null);
+            }
+            catch (TaskCanceledException)
+            {
+                MarkTimeoutFailure(movie);
+            }
+            catch (HttpRequestException)
+            {
+                MarkNetworkFailure(movie);
+            }
+        }
+
+        private async Task TryFuzzyFallbackAsync(
+            Movie movie,
+            string parsedTitle,
+            int? parsedYear,
+            string? originalNotFoundError)
+        {
+            _logger.LogInformation(
+                "Exact OMDb title/year lookup returned movie-not-found; starting bounded candidate discovery.");
+
+            var candidates = new Dictionary<string, OmdbSearchItem>(
+                StringComparer.OrdinalIgnoreCase);
+            var allCandidateResultsEvaluated = true;
+
+            var candidateQueries = BuildCandidateQueries(parsedTitle).ToList();
+
+            for (var queryIndex = 0; queryIndex < candidateQueries.Count; queryIndex++)
+            {
+                var query = candidateQueries[queryIndex];
+                var queryProducedPlausibleCandidate = false;
+
+                for (var page = 1; page <= MaximumSearchPages; page++)
+                {
+                    var url =
+                        $"https://www.omdbapi.com/?s={Uri.EscapeDataString(query)}" +
+                        $"&type=movie&page={page}";
+
+                    // The first search omits the year so a strong title with a
+                    // conflicting year can still be suggested for review. A
+                    // broader second query uses the parsed year to keep the
+                    // candidate set narrow enough for a meaningful winner test.
+                    if (queryIndex > 0 && parsedYear.HasValue)
+                        url += $"&y={parsedYear.Value}";
+
+                    url += $"&apikey={_apiKey}";
+                    var search = await FetchJsonAsync<OmdbSearchResponse>(url, movie);
+
+                    if (search == null)
+                        return;
+
+                    if (string.IsNullOrWhiteSpace(search.Response))
+                    {
+                        MarkMalformedResponse(movie);
+                        return;
+                    }
+
+                    if (search.Response.Equals(
+                            "False",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (ClassifyOmdbFailure(search.Error) ==
+                            MetadataLookupFailureType.MovieNotFound)
+                        {
+                            break;
+                        }
+
+                        MarkOmdbFailure(movie, search.Error);
+                        return;
+                    }
+
+                    if (!search.Response.Equals(
+                            "True",
+                            StringComparison.OrdinalIgnoreCase) ||
+                        search.Search == null)
+                    {
+                        MarkMalformedResponse(movie);
+                        return;
+                    }
+
+                    foreach (var candidate in search.Search.Where(IsUsableMovieCandidate))
+                    {
+                        candidates.TryAdd(candidate.ImdbID, candidate);
+
+                        if (CalculateTitleSimilarity(parsedTitle, candidate.Title) >=
+                            MinimumSuggestedTitleSimilarity)
+                        {
+                            queryProducedPlausibleCandidate = true;
+                        }
+                    }
+
+                    if (!int.TryParse(search.TotalResults, out var totalResults) ||
+                        totalResults < 0)
+                    {
+                        MarkMalformedResponse(movie);
+                        return;
+                    }
+
+                    var evaluatedResults = page * 10;
+
+                    if (totalResults > evaluatedResults &&
+                        page == MaximumSearchPages)
+                    {
+                        allCandidateResultsEvaluated = false;
+                    }
+
+                    if (totalResults <= evaluatedResults || search.Search.Count == 0)
+                        break;
+                }
+
+                if (queryProducedPlausibleCandidate)
+                    break;
+            }
+
+            var rankedCandidates = candidates.Values
+                .Select(candidate => ScoreCandidate(parsedTitle, parsedYear, candidate))
+                .Where(candidate =>
+                    candidate.TitleSimilarity >= MinimumSuggestedTitleSimilarity)
+                .OrderByDescending(candidate => candidate.Confidence)
+                .ThenByDescending(candidate => candidate.TitleSimilarity)
+                .ThenBy(candidate => candidate.Title, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (rankedCandidates.Count == 0)
+            {
+                MarkOmdbFailure(movie, originalNotFoundError);
                 return;
             }
+
+            var winner = rankedCandidates[0];
+            var runnerUp = rankedCandidates.Skip(1).FirstOrDefault();
+            var winnerMargin = runnerUp == null
+                ? 100
+                : winner.Confidence - runnerUp.Confidence;
+            var hasClearWinner = allCandidateResultsEvaluated &&
+                                 winnerMargin >= MinimumWinnerMargin;
+            var canAutomaticallyAccept = winner.YearMatches &&
+                                         winner.TitleSimilarity >=
+                                         MinimumFuzzyTitleSimilarity &&
+                                         winner.Confidence >=
+                                         MinimumAutomaticFuzzyConfidence &&
+                                         hasClearWinner;
+
+            if (!canAutomaticallyAccept)
+            {
+                var failureType = winner.YearConflicts
+                    ? MetadataLookupFailureType.FuzzyCandidateYearConflict
+                    : !hasClearWinner
+                        ? MetadataLookupFailureType.AmbiguousFuzzyCandidates
+                        : MetadataLookupFailureType.FuzzyCandidateNeedsReview;
+                var explanation = winner.YearConflicts
+                    ? "the candidate release year conflicts with the parsed year"
+                    : !allCandidateResultsEvaluated
+                        ? "the candidate search returned more results than the bounded search evaluated"
+                        : !hasClearWinner
+                            ? "another candidate scored too closely"
+                            : "the candidate did not meet the automatic-match threshold";
+
+                MarkFuzzyCandidateForReview(movie, winner, failureType, explanation);
+                return;
+            }
+
+            await ApplyFuzzyWinnerAsync(movie, parsedTitle, parsedYear, winner);
+        }
+
+        private async Task ApplyFuzzyWinnerAsync(
+            Movie movie,
+            string parsedTitle,
+            int? parsedYear,
+            ScoredCandidate winner)
+        {
+            var url =
+                $"https://www.omdbapi.com/?i={Uri.EscapeDataString(winner.ImdbId)}" +
+                $"&type=movie&apikey={_apiKey}";
+            var data = await FetchJsonAsync<OmdbResponse>(url, movie);
+
+            if (data == null)
+                return;
+
+            if (string.IsNullOrWhiteSpace(data.Response))
+            {
+                MarkMalformedResponse(movie);
+                return;
+            }
+
+            if (data.Response.Equals("False", StringComparison.OrdinalIgnoreCase))
+            {
+                MarkOmdbFailure(movie, data.Error);
+                return;
+            }
+
+            if (!data.Response.Equals("True", StringComparison.OrdinalIgnoreCase))
+            {
+                MarkMalformedResponse(movie);
+                return;
+            }
+
+            var returnedImdbId = NormalizeMetadataValue(data.ImdbID);
+            var returnedYear = ParseYear(data.Year);
+
+            if (!string.Equals(
+                    returnedImdbId,
+                    winner.ImdbId,
+                    StringComparison.OrdinalIgnoreCase) ||
+                returnedYear != winner.Year ||
+                (parsedYear.HasValue && returnedYear != parsedYear))
+            {
+                MarkFuzzyCandidateForReview(
+                    movie,
+                    winner,
+                    MetadataLookupFailureType.FuzzyCandidateNeedsReview,
+                    "the OMDb detail response did not agree with the selected candidate identity");
+                return;
+            }
+
+            ApplySuccessfulResponse(
+                movie,
+                data,
+                parsedTitle,
+                parsedYear,
+                null,
+                false,
+                winner.Confidence);
+            movie.SuggestedTitle = winner.Title;
+            movie.SuggestedYear = winner.Year;
+            movie.SuggestedImdbId = winner.ImdbId;
+        }
+
+        private async Task<T?> FetchJsonAsync<T>(string url, Movie movie)
+        {
+            using var response = await _httpClient.GetAsync(url);
 
             if (!response.IsSuccessStatusCode)
             {
-                if (hasImdbId)
-                    MarkImdbLookupFailure(movie);
+                var statusDetail = $"HTTP {(int)response.StatusCode}";
+                var reasonPhrase = SanitizeDiagnostic(response.ReasonPhrase);
 
-                return;
+                if (!string.IsNullOrWhiteSpace(reasonPhrase))
+                    statusDetail += $" ({reasonPhrase})";
+
+                MarkLookupFailure(
+                    movie,
+                    MetadataLookupFailureType.HttpFailure,
+                    statusDetail,
+                    $"OMDb lookup failed: {statusDetail}");
+                return default;
             }
 
-            var json = await response.Content.ReadAsStringAsync();
-            var data = JsonSerializer.Deserialize<OmdbResponse>(json);
+            string json;
 
-            if (data == null || data.Response == "False")
+            try
             {
-                if (hasImdbId)
-                    MarkImdbLookupFailure(movie);
-
-                return;
+                json = await response.Content.ReadAsStringAsync();
+            }
+            catch (TaskCanceledException)
+            {
+                MarkTimeoutFailure(movie);
+                return default;
+            }
+            catch (Exception ex) when (ex is HttpRequestException || ex is IOException)
+            {
+                MarkNetworkFailure(movie);
+                return default;
             }
 
+            try
+            {
+                var result = JsonSerializer.Deserialize<T>(json);
+
+                if (result != null)
+                    return result;
+            }
+            catch (Exception ex) when (ex is JsonException || ex is NotSupportedException)
+            {
+                // Converted to the same fail-closed review state below.
+            }
+
+            MarkMalformedResponse(movie);
+            return default;
+        }
+
+        private static IEnumerable<string> BuildCandidateQueries(string parsedTitle)
+        {
+            yield return parsedTitle;
+
+            var tokens = Regex.Matches(parsedTitle, @"[A-Za-z0-9]+")
+                .Select(match => match.Value)
+                .Where(token => !token.Equals("the", StringComparison.OrdinalIgnoreCase) &&
+                                !token.Equals("a", StringComparison.OrdinalIgnoreCase) &&
+                                !token.Equals("an", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (tokens.Count == 0)
+                yield break;
+
+            var broadQuery = tokens.Count == 1
+                ? ShortenSingleToken(tokens[0])
+                : tokens.OrderByDescending(token => token.Length).First();
+
+            if (!broadQuery.Equals(parsedTitle, StringComparison.OrdinalIgnoreCase))
+                yield return broadQuery;
+        }
+
+        private static string ShortenSingleToken(string token)
+        {
+            var charactersToRemove = token.Length >= 8 ? 2 : 1;
+
+            return token.Length - charactersToRemove >= 5
+                ? token[..^charactersToRemove]
+                : token;
+        }
+
+        private static bool IsUsableMovieCandidate(OmdbSearchItem? candidate)
+        {
+            return candidate != null &&
+                   string.Equals(
+                       candidate.Type,
+                       "movie",
+                       StringComparison.OrdinalIgnoreCase) &&
+                   !string.IsNullOrWhiteSpace(candidate.Title) &&
+                   !string.IsNullOrWhiteSpace(candidate.ImdbID);
+        }
+
+        private static ScoredCandidate ScoreCandidate(
+            string parsedTitle,
+            int? parsedYear,
+            OmdbSearchItem candidate)
+        {
+            var candidateYear = ParseYear(candidate.Year);
+            var titleSimilarity = CalculateTitleSimilarity(parsedTitle, candidate.Title);
+            var yearMatches = parsedYear.HasValue &&
+                              candidateYear.HasValue &&
+                              parsedYear.Value == candidateYear.Value;
+            var yearConflicts = parsedYear.HasValue &&
+                                candidateYear.HasValue &&
+                                parsedYear.Value != candidateYear.Value;
+            var confidence = yearMatches
+                ? Math.Round((titleSimilarity * 80) + 20, 0)
+                : yearConflicts
+                    ? Math.Round(titleSimilarity * 70, 0)
+                    : Math.Round(titleSimilarity * 80, 0);
+
+            return new ScoredCandidate(
+                candidate.Title.Trim(),
+                candidateYear,
+                candidate.ImdbID.Trim(),
+                titleSimilarity,
+                confidence,
+                yearMatches,
+                yearConflicts);
+        }
+
+        private static void MarkFuzzyCandidateForReview(
+            Movie movie,
+            ScoredCandidate candidate,
+            MetadataLookupFailureType failureType,
+            string explanation)
+        {
+            var candidateYear = candidate.Year?.ToString() ?? "year unknown";
+            var reason =
+                $"Possible OMDb match: {candidate.Title} ({candidateYear}) " +
+                $"({candidate.Confidence:0}% confidence); manual confirmation required because {explanation}.";
+
+            movie.MetadataFetched = false;
+            movie.MetadataMatchedByImdbId = false;
+            movie.SuggestedTitle = candidate.Title;
+            movie.SuggestedYear = candidate.Year;
+            movie.SuggestedImdbId = candidate.ImdbId;
+            movie.MatchConfidence = candidate.Confidence;
+            movie.IsFuzzyMatch = true;
+            movie.SetMetadataReview(reason, failureType, explanation);
+            movie.Status = "Needs Review";
+        }
+
+        private void ApplySuccessfulResponse(
+            Movie movie,
+            OmdbResponse data,
+            string? parsedTitle,
+            int? parsedYear,
+            string? originalImdbId,
+            bool hasImdbId,
+            double? acceptedFuzzyConfidence)
+        {
             var metadataYear = ParseYear(data.Year);
             var metadataTitle = NormalizeMetadataValue(data.Title);
             var returnedImdbId = NormalizeMetadataValue(data.ImdbID);
 
             movie.SuggestedTitle = metadataTitle;
+            movie.SuggestedYear = metadataYear;
+            movie.SuggestedImdbId = returnedImdbId;
             movie.MatchConfidence = CalculateConfidence(
                 parsedTitle,
                 parsedYear,
                 metadataTitle ?? string.Empty,
                 metadataYear,
                 hasImdbId);
+            if (acceptedFuzzyConfidence.HasValue)
+                movie.MatchConfidence = acceptedFuzzyConfidence.Value;
+
+            movie.IsFuzzyMatch = acceptedFuzzyConfidence.HasValue;
             movie.MetadataMatchedByImdbId = hasImdbId;
             movie.Title = metadataTitle ?? movie.Title;
             movie.Year = metadataYear ?? movie.Year;
@@ -107,6 +584,29 @@ namespace PIM.Infrastructure.Metadata
             movie.MpaRating = NormalizeMetadataValue(data.Rated);
             movie.Genres = ParseGenres(data.Genre);
             movie.PrimaryGenre = movie.Genres.FirstOrDefault();
+
+            var missingFields = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(movie.Title))
+                missingFields.Add("title");
+
+            if (!movie.Year.HasValue)
+                missingFields.Add("release year");
+
+            if (string.IsNullOrWhiteSpace(movie.ImdbId))
+                missingFields.Add("IMDb ID");
+
+            if (missingFields.Count > 0)
+            {
+                var detail = string.Join(", ", missingFields);
+                MarkLookupFailure(
+                    movie,
+                    MetadataLookupFailureType.MissingRequiredFields,
+                    detail,
+                    $"OMDb lookup succeeded but did not return required fields: {detail}");
+                return;
+            }
+
             movie.MetadataFetched = true;
 
             // An IMDb ID embedded in the source path is the authoritative movie
@@ -114,14 +614,6 @@ namespace PIM.Infrastructure.Metadata
             // differences are diagnostic only and must not force manual review.
             if (hasImdbId)
             {
-                if (string.IsNullOrWhiteSpace(movie.Title) || !movie.Year.HasValue)
-                {
-                    movie.RequireReview(
-                        "IMDb ID matched, but OMDb did not return the title and release year required for naming");
-                    movie.Status = "Needs Review";
-                    return;
-                }
-
                 movie.Status = movie.NeedsReview
                     ? "Needs Review"
                     : "IMDb ID Match";
@@ -130,8 +622,12 @@ namespace PIM.Infrastructure.Metadata
 
             if (movie.MatchConfidence < 85)
             {
-                movie.RequireReview(
-                    $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)");
+                var reviewReason =
+                    $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)";
+                movie.SetMetadataReview(
+                    reviewReason,
+                    MetadataLookupFailureType.LowConfidence,
+                    $"{movie.MatchConfidence:0}% confidence");
                 movie.Status = "Needs Review";
             }
             else
@@ -142,13 +638,105 @@ namespace PIM.Infrastructure.Metadata
             }
         }
 
-        private static void MarkImdbLookupFailure(Movie movie)
+        private void MarkOmdbFailure(Movie movie, string? rawError)
+        {
+            var error = SanitizeDiagnostic(rawError);
+
+            if (string.IsNullOrWhiteSpace(error))
+                error = "OMDb returned an unspecified error";
+
+            var failureType = ClassifyOmdbFailure(error);
+
+            MarkLookupFailure(
+                movie,
+                failureType,
+                error,
+                $"OMDb lookup failed: {error}");
+        }
+
+        private static MetadataLookupFailureType ClassifyOmdbFailure(string? error)
+        {
+            if (error?.Contains("request limit", StringComparison.OrdinalIgnoreCase) == true ||
+                error?.Contains("quota", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return MetadataLookupFailureType.RequestLimitReached;
+            }
+
+            if (error?.Contains("api key", StringComparison.OrdinalIgnoreCase) == true)
+                return MetadataLookupFailureType.InvalidApiKey;
+
+            if (error?.TrimStart().StartsWith(
+                    "Movie not found",
+                    StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return MetadataLookupFailureType.MovieNotFound;
+            }
+
+            return MetadataLookupFailureType.OmdbError;
+        }
+
+        private void MarkTimeoutFailure(Movie movie)
+        {
+            MarkLookupFailure(
+                movie,
+                MetadataLookupFailureType.Timeout,
+                "The OMDb request timed out.",
+                "OMDb lookup failed: request timed out");
+        }
+
+        private void MarkNetworkFailure(Movie movie)
+        {
+            MarkLookupFailure(
+                movie,
+                MetadataLookupFailureType.NetworkFailure,
+                "The OMDb request could not reach the service.",
+                "OMDb lookup failed: network error");
+        }
+
+        private void MarkMalformedResponse(Movie movie)
+        {
+            MarkLookupFailure(
+                movie,
+                MetadataLookupFailureType.MalformedResponse,
+                "OMDb returned malformed or unusable data.",
+                "OMDb lookup failed: malformed or unusable response");
+        }
+
+        private void MarkLookupFailure(
+            Movie movie,
+            MetadataLookupFailureType failureType,
+            string failureDetail,
+            string reviewReason)
         {
             movie.MetadataFetched = false;
             movie.MetadataMatchedByImdbId = false;
-            movie.RequireReview("IMDb ID found, but OMDb lookup failed");
+            movie.SetMetadataReview(
+                reviewReason,
+                failureType,
+                failureDetail);
             movie.MatchConfidence = 0;
-            movie.Status = "IMDb ID Lookup Failed";
+            movie.Status = "Metadata Lookup Failed";
+
+            _logger.LogWarning(
+                "OMDb lookup failed with {FailureType}: {FailureDetail}",
+                failureType,
+                failureDetail);
+        }
+
+        private string? SanitizeDiagnostic(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+
+            var sanitized = value
+                .Replace(_apiKey, "[redacted]", StringComparison.Ordinal)
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Trim();
+
+            return sanitized.Length <= 240
+                ? sanitized
+                : sanitized[..240];
         }
 
         private static string? NormalizeMetadataValue(string? value)
@@ -308,6 +896,41 @@ namespace PIM.Infrastructure.Metadata
             public string ImdbID { get; set; } = string.Empty;
 
             public string Response { get; set; } = string.Empty;
+
+            public string Error { get; set; } = string.Empty;
         }
+
+        private class OmdbSearchResponse
+        {
+            public List<OmdbSearchItem>? Search { get; set; }
+
+            [JsonPropertyName("totalResults")]
+            public string TotalResults { get; set; } = string.Empty;
+
+            public string Response { get; set; } = string.Empty;
+
+            public string Error { get; set; } = string.Empty;
+        }
+
+        private class OmdbSearchItem
+        {
+            public string Title { get; set; } = string.Empty;
+
+            public string Year { get; set; } = string.Empty;
+
+            [JsonPropertyName("imdbID")]
+            public string ImdbID { get; set; } = string.Empty;
+
+            public string Type { get; set; } = string.Empty;
+        }
+
+        private sealed record ScoredCandidate(
+            string Title,
+            int? Year,
+            string ImdbId,
+            double TitleSimilarity,
+            double Confidence,
+            bool YearMatches,
+            bool YearConflicts);
     }
 }

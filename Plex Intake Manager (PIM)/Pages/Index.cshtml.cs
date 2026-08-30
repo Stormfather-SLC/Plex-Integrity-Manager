@@ -594,11 +594,12 @@ namespace PIM.Web.Pages
             return movies
                 .Where(movie =>
                     !movie.MetadataFetched ||
-                    (!string.IsNullOrWhiteSpace(movie.ImdbId) &&
-                     (string.IsNullOrWhiteSpace(movie.Title) ||
-                      !movie.Year.HasValue ||
-                      (profileUsesRating && string.IsNullOrWhiteSpace(movie.MpaRating)) ||
-                      (profileUsesGenre && string.IsNullOrWhiteSpace(movie.PrimaryGenre)))))
+                    movie.HasMetadataReviewReason ||
+                    string.IsNullOrWhiteSpace(movie.Title) ||
+                    !movie.Year.HasValue ||
+                    string.IsNullOrWhiteSpace(movie.ImdbId) ||
+                    (profileUsesRating && string.IsNullOrWhiteSpace(movie.MpaRating)) ||
+                    (profileUsesGenre && string.IsNullOrWhiteSpace(movie.PrimaryGenre)))
                 .ToList();
         }
 
@@ -620,9 +621,13 @@ namespace PIM.Web.Pages
                 if (delayMs > 0)
                     await Task.Delay(delayMs);
 
-                if (string.IsNullOrWhiteSpace(movie.ImdbId))
+                if (string.IsNullOrWhiteSpace(movie.ImdbId) &&
+                    !movie.HasMetadataReviewReason)
                 {
-                    movie.RequireReview("IMDb ID could not be determined");
+                    movie.SetMetadataReview(
+                        "IMDb ID could not be determined",
+                        MetadataLookupFailureType.MissingRequiredFields,
+                        "OMDb did not provide an IMDb ID.");
                     movie.Status = "Metadata Not Found";
                 }
                 else if (!movie.NeedsReview &&
