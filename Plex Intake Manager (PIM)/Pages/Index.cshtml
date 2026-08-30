@@ -439,11 +439,15 @@
                                             {
                                                 <div><strong>Metadata diagnostic:</strong> @item.MetadataFailureDetail</div>
                                             }
+                                            @if (!string.IsNullOrWhiteSpace(item.MetadataDiscoveryReason))
+                                            {
+                                                <div><strong>Candidate discovery:</strong> @item.MetadataDiscoveryReason</div>
+                                            }
                                             @if (item.HasMetadataSuggestion)
                                             {
                                                 <div class="mt-1">
                                                     <strong>Suggested match:</strong>
-                                                    @item.SuggestedTitle (@item.SuggestedYear) — @item.SuggestedImdbId
+                                                    @item.SuggestedTitle (@(item.SuggestedYear?.ToString() ?? "year unknown")) — @item.SuggestedImdbId
                                                 </div>
                                             }
                                             @if (item.IsDuplicate)
@@ -716,6 +720,10 @@
                                             {
                                                 <div><strong>Metadata diagnostic:</strong> @movie.MetadataLookupFailureDetail</div>
                                             }
+                                            @if (!string.IsNullOrWhiteSpace(movie.MetadataDiscoveryReason))
+                                            {
+                                                <div><strong>Candidate discovery:</strong> @movie.MetadataDiscoveryReason</div>
+                                            }
                                             @if (movie.IsDuplicate)
                                             {
                                                 <div><strong>Duplicate decision:</strong> @(movie.KeepRecommended ? "Recommended copy" : "Not selected as the preferred copy")</div>
@@ -733,16 +741,23 @@
                                                 <div class="mt-2 p-2 bg-light border rounded">
                                                     <div>
                                                         <strong>Suggested match:</strong>
-                                                        @movie.SuggestedTitle (@movie.SuggestedYear) — @movie.SuggestedImdbId
+                                                        @movie.SuggestedTitle (@(movie.SuggestedYear?.ToString() ?? "year unknown")) — @movie.SuggestedImdbId
                                                     </div>
-                                                    <form method="post" asp-page-handler="AcceptSuggestedMatch" class="mt-1">
-                                                        @Html.AntiForgeryToken()
-                                                        <input type="hidden" name="movieId" value="@movie.Id" />
-                                                        <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
-                                                        <button type="submit" class="btn btn-sm btn-primary">
-                                                            Accept Suggested Match
-                                                        </button>
-                                                    </form>
+                                                    @if (movie.CanAcceptMetadataSuggestion)
+                                                    {
+                                                        <form method="post" asp-page-handler="AcceptSuggestedMatch" class="mt-1">
+                                                            @Html.AntiForgeryToken()
+                                                            <input type="hidden" name="movieId" value="@movie.Id" />
+                                                            <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
+                                                            <button type="submit" class="btn btn-sm btn-primary">
+                                                                Accept Suggested Match
+                                                            </button>
+                                                        </form>
+                                                    }
+                                                    else
+                                                    {
+                                                        <div class="mt-1">OMDb did not provide a release year, so this suggestion cannot be accepted safely.</div>
+                                                    }
                                                 </div>
                                             }
                                         </div>

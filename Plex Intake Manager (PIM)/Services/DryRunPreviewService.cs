@@ -63,6 +63,8 @@ public class DryRunPreviewService : IDryRunPreviewService
             SuggestedTitle = movie.SuggestedTitle ?? string.Empty,
             SuggestedYear = movie.SuggestedYear,
             SuggestedImdbId = movie.SuggestedImdbId ?? string.Empty,
+            MetadataMatchOrigin = movie.MetadataMatchOrigin,
+            MetadataDiscoveryReason = movie.MetadataDiscoveryReason ?? string.Empty,
             IsDuplicate = movie.IsDuplicate,
             KeepRecommended = movie.KeepRecommended,
             NeedsReview = movie.NeedsReview,

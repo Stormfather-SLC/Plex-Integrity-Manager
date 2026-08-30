@@ -262,7 +262,7 @@ namespace PIM.Web.Pages
 
             var movie = movies.SingleOrDefault(candidate => candidate.Id == movieId);
 
-            if (movie == null || !movie.HasMetadataSuggestion)
+            if (movie == null || !movie.CanAcceptMetadataSuggestion)
             {
                 TempData["Message"] =
                     "No concrete metadata suggestion is available for that movie.";

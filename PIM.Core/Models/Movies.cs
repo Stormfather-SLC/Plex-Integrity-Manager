@@ -236,14 +236,20 @@ namespace PIM.Core.Models
 
         public bool HasMetadataSuggestion =>
             !string.IsNullOrWhiteSpace(SuggestedTitle) &&
-            SuggestedYear.HasValue &&
             !string.IsNullOrWhiteSpace(SuggestedImdbId);
+
+        public bool CanAcceptMetadataSuggestion =>
+            HasMetadataSuggestion && SuggestedYear.HasValue;
 
         public double? MatchConfidence { get; set; }
 
         public bool IsFuzzyMatch { get; set; }
 
         public bool MetadataMatchedByImdbId { get; set; }
+
+        public MetadataMatchOrigin MetadataMatchOrigin { get; set; }
+
+        public string? MetadataDiscoveryReason { get; set; }
 
         // =========================================================
         // File Information

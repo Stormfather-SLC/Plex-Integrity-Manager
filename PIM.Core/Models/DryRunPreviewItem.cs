@@ -34,6 +34,10 @@ public class DryRunPreviewItem
 
     public string SuggestedImdbId { get; set; } = string.Empty;
 
+    public MetadataMatchOrigin MetadataMatchOrigin { get; set; }
+
+    public string MetadataDiscoveryReason { get; set; } = string.Empty;
+
     public string CssClass { get; set; } = string.Empty;
 
     public bool IsDuplicate { get; set; }
@@ -74,6 +78,5 @@ public class DryRunPreviewItem
 
     public bool HasMetadataSuggestion =>
         !string.IsNullOrWhiteSpace(SuggestedTitle) &&
-        SuggestedYear.HasValue &&
         !string.IsNullOrWhiteSpace(SuggestedImdbId);
 }

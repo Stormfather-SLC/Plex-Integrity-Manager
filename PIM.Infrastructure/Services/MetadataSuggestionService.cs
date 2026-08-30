@@ -27,7 +27,7 @@ public sealed class MetadataSuggestionService : IMetadataSuggestionService
         ArgumentNullException.ThrowIfNull(allMovies);
         ArgumentNullException.ThrowIfNull(profile);
 
-        if (!movie.HasMetadataSuggestion ||
+        if (!movie.CanAcceptMetadataSuggestion ||
             !allMovies.Any(candidate => candidate.Id == movie.Id))
         {
             return false;
