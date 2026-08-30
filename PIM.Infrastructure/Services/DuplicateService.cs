@@ -215,7 +215,8 @@ namespace PIM.Infrastructure.Services
             foreach (var movie in movies)
             {
                 // Missing IMDb ID
-                if (string.IsNullOrWhiteSpace(movie.ImdbId))
+                if (string.IsNullOrWhiteSpace(movie.ImdbId) &&
+                    !movie.HasMetadataReviewReason)
                 {
                     movie.RequireReview("Missing IMDb ID");
                 }

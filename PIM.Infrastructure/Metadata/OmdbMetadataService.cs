@@ -3,6 +3,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 
@@ -12,12 +14,15 @@ namespace PIM.Infrastructure.Metadata
     {
         private readonly HttpClient _httpClient;
         private readonly string _apiKey;
+        private readonly ILogger<OmdbMetadataService> _logger;
 
         public OmdbMetadataService(
             HttpClient httpClient,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            ILogger<OmdbMetadataService>? logger = null)
         {
             _httpClient = httpClient;
+            _logger = logger ?? NullLogger<OmdbMetadataService>.Instance;
 
             _apiKey = configuration["Omdb:ApiKey"]?.Trim()
                 ?? throw new InvalidOperationException(
@@ -33,13 +38,24 @@ namespace PIM.Infrastructure.Metadata
 
         public async Task EnrichAsync(Movie movie)
         {
+            ArgumentNullException.ThrowIfNull(movie);
+
+            movie.ClearMetadataReviewReasons();
+
             var parsedTitle = movie.Title;
             var parsedYear = movie.Year;
             var originalImdbId = movie.ImdbId;
             var hasImdbId = !string.IsNullOrWhiteSpace(originalImdbId);
 
             if (!hasImdbId && string.IsNullOrWhiteSpace(parsedTitle))
+            {
+                MarkLookupFailure(
+                    movie,
+                    MetadataLookupFailureType.MissingLookupInput,
+                    "A title or IMDb ID is required to query OMDb.",
+                    "OMDb lookup not attempted: title and IMDb ID are missing");
                 return;
+            }
 
             var url = hasImdbId
                 ? $"https://www.omdbapi.com/?i={Uri.EscapeDataString(originalImdbId!)}"
@@ -50,45 +66,114 @@ namespace PIM.Infrastructure.Metadata
 
             url += $"&type=movie&apikey={_apiKey}";
 
-            Console.WriteLine(hasImdbId
-                ? $"OMDb Lookup by IMDb ID: IMDb='{originalImdbId}', ParsedTitle='{parsedTitle}', ParsedYear='{parsedYear}'"
-                : $"OMDb Lookup by Title: Title='{parsedTitle}', Year='{parsedYear}'");
-
-            HttpResponseMessage response;
+            _logger.LogInformation(
+                "Starting OMDb {LookupType} lookup for title '{Title}' and year '{Year}'.",
+                hasImdbId ? "IMDb ID" : "title/year",
+                parsedTitle,
+                parsedYear);
 
             try
             {
-                response = await _httpClient.GetAsync(url);
+                using var response = await _httpClient.GetAsync(url);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var statusDetail = $"HTTP {(int)response.StatusCode}";
+                    var reasonPhrase = SanitizeDiagnostic(response.ReasonPhrase);
+
+                    if (!string.IsNullOrWhiteSpace(reasonPhrase))
+                        statusDetail += $" ({reasonPhrase})";
+
+                    MarkLookupFailure(
+                        movie,
+                        MetadataLookupFailureType.HttpFailure,
+                        statusDetail,
+                        $"OMDb lookup failed: {statusDetail}");
+                    return;
+                }
+
+                string json;
+
+                try
+                {
+                    json = await response.Content.ReadAsStringAsync();
+                }
+                catch (TaskCanceledException)
+                {
+                    MarkTimeoutFailure(movie);
+                    return;
+                }
+                catch (Exception ex) when (
+                    ex is HttpRequestException ||
+                    ex is IOException)
+                {
+                    MarkNetworkFailure(movie);
+                    return;
+                }
+
+                OmdbResponse? data;
+
+                try
+                {
+                    data = JsonSerializer.Deserialize<OmdbResponse>(json);
+                }
+                catch (Exception ex) when (
+                    ex is JsonException ||
+                    ex is NotSupportedException)
+                {
+                    MarkMalformedResponse(movie);
+                    return;
+                }
+
+                if (data == null ||
+                    string.IsNullOrWhiteSpace(data.Response))
+                {
+                    MarkMalformedResponse(movie);
+                    return;
+                }
+
+                if (data.Response.Equals(
+                        "False",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    MarkOmdbFailure(movie, data.Error);
+                    return;
+                }
+
+                if (!data.Response.Equals(
+                        "True",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    MarkMalformedResponse(movie);
+                    return;
+                }
+
+                ApplySuccessfulResponse(
+                    movie,
+                    data,
+                    parsedTitle,
+                    parsedYear,
+                    originalImdbId,
+                    hasImdbId);
             }
-            catch (Exception ex) when (
-                ex is HttpRequestException ||
-                ex is TaskCanceledException)
+            catch (TaskCanceledException)
             {
-                if (hasImdbId)
-                    MarkImdbLookupFailure(movie);
-
-                return;
+                MarkTimeoutFailure(movie);
             }
-
-            if (!response.IsSuccessStatusCode)
+            catch (HttpRequestException)
             {
-                if (hasImdbId)
-                    MarkImdbLookupFailure(movie);
-
-                return;
+                MarkNetworkFailure(movie);
             }
+        }
 
-            var json = await response.Content.ReadAsStringAsync();
-            var data = JsonSerializer.Deserialize<OmdbResponse>(json);
-
-            if (data == null || data.Response == "False")
-            {
-                if (hasImdbId)
-                    MarkImdbLookupFailure(movie);
-
-                return;
-            }
-
+        private void ApplySuccessfulResponse(
+            Movie movie,
+            OmdbResponse data,
+            string? parsedTitle,
+            int? parsedYear,
+            string? originalImdbId,
+            bool hasImdbId)
+        {
             var metadataYear = ParseYear(data.Year);
             var metadataTitle = NormalizeMetadataValue(data.Title);
             var returnedImdbId = NormalizeMetadataValue(data.ImdbID);
@@ -107,6 +192,29 @@ namespace PIM.Infrastructure.Metadata
             movie.MpaRating = NormalizeMetadataValue(data.Rated);
             movie.Genres = ParseGenres(data.Genre);
             movie.PrimaryGenre = movie.Genres.FirstOrDefault();
+
+            var missingFields = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(movie.Title))
+                missingFields.Add("title");
+
+            if (!movie.Year.HasValue)
+                missingFields.Add("release year");
+
+            if (string.IsNullOrWhiteSpace(movie.ImdbId))
+                missingFields.Add("IMDb ID");
+
+            if (missingFields.Count > 0)
+            {
+                var detail = string.Join(", ", missingFields);
+                MarkLookupFailure(
+                    movie,
+                    MetadataLookupFailureType.MissingRequiredFields,
+                    detail,
+                    $"OMDb lookup succeeded but did not return required fields: {detail}");
+                return;
+            }
+
             movie.MetadataFetched = true;
 
             // An IMDb ID embedded in the source path is the authoritative movie
@@ -114,14 +222,6 @@ namespace PIM.Infrastructure.Metadata
             // differences are diagnostic only and must not force manual review.
             if (hasImdbId)
             {
-                if (string.IsNullOrWhiteSpace(movie.Title) || !movie.Year.HasValue)
-                {
-                    movie.RequireReview(
-                        "IMDb ID matched, but OMDb did not return the title and release year required for naming");
-                    movie.Status = "Needs Review";
-                    return;
-                }
-
                 movie.Status = movie.NeedsReview
                     ? "Needs Review"
                     : "IMDb ID Match";
@@ -130,8 +230,12 @@ namespace PIM.Infrastructure.Metadata
 
             if (movie.MatchConfidence < 85)
             {
-                movie.RequireReview(
-                    $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)");
+                var reviewReason =
+                    $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)";
+                movie.SetMetadataReview(
+                    reviewReason,
+                    MetadataLookupFailureType.LowConfidence,
+                    $"{movie.MatchConfidence:0}% confidence");
                 movie.Status = "Needs Review";
             }
             else
@@ -142,13 +246,99 @@ namespace PIM.Infrastructure.Metadata
             }
         }
 
-        private static void MarkImdbLookupFailure(Movie movie)
+        private void MarkOmdbFailure(Movie movie, string? rawError)
+        {
+            var error = SanitizeDiagnostic(rawError);
+
+            if (string.IsNullOrWhiteSpace(error))
+                error = "OMDb returned an unspecified error";
+
+            var failureType = error.Contains(
+                    "not found",
+                    StringComparison.OrdinalIgnoreCase)
+                ? MetadataLookupFailureType.MovieNotFound
+                : error.Contains(
+                    "request limit",
+                    StringComparison.OrdinalIgnoreCase) ||
+                  error.Contains(
+                    "quota",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? MetadataLookupFailureType.RequestLimitReached
+                    : error.Contains(
+                        "api key",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? MetadataLookupFailureType.InvalidApiKey
+                        : MetadataLookupFailureType.OmdbError;
+
+            MarkLookupFailure(
+                movie,
+                failureType,
+                error,
+                $"OMDb lookup failed: {error}");
+        }
+
+        private void MarkTimeoutFailure(Movie movie)
+        {
+            MarkLookupFailure(
+                movie,
+                MetadataLookupFailureType.Timeout,
+                "The OMDb request timed out.",
+                "OMDb lookup failed: request timed out");
+        }
+
+        private void MarkNetworkFailure(Movie movie)
+        {
+            MarkLookupFailure(
+                movie,
+                MetadataLookupFailureType.NetworkFailure,
+                "The OMDb request could not reach the service.",
+                "OMDb lookup failed: network error");
+        }
+
+        private void MarkMalformedResponse(Movie movie)
+        {
+            MarkLookupFailure(
+                movie,
+                MetadataLookupFailureType.MalformedResponse,
+                "OMDb returned malformed or unusable data.",
+                "OMDb lookup failed: malformed or unusable response");
+        }
+
+        private void MarkLookupFailure(
+            Movie movie,
+            MetadataLookupFailureType failureType,
+            string failureDetail,
+            string reviewReason)
         {
             movie.MetadataFetched = false;
             movie.MetadataMatchedByImdbId = false;
-            movie.RequireReview("IMDb ID found, but OMDb lookup failed");
+            movie.SetMetadataReview(
+                reviewReason,
+                failureType,
+                failureDetail);
             movie.MatchConfidence = 0;
-            movie.Status = "IMDb ID Lookup Failed";
+            movie.Status = "Metadata Lookup Failed";
+
+            _logger.LogWarning(
+                "OMDb lookup failed with {FailureType}: {FailureDetail}",
+                failureType,
+                failureDetail);
+        }
+
+        private string? SanitizeDiagnostic(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+
+            var sanitized = value
+                .Replace(_apiKey, "[redacted]", StringComparison.Ordinal)
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Trim();
+
+            return sanitized.Length <= 240
+                ? sanitized
+                : sanitized[..240];
         }
 
         private static string? NormalizeMetadataValue(string? value)
@@ -308,6 +498,8 @@ namespace PIM.Infrastructure.Metadata
             public string ImdbID { get; set; } = string.Empty;
 
             public string Response { get; set; } = string.Empty;
+
+            public string Error { get; set; } = string.Empty;
         }
     }
 }

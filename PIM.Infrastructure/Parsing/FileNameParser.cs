@@ -139,6 +139,20 @@ namespace PIM.Infrastructure.Parsing
             cleaned = Regex.Replace(cleaned, @"\{\s*\}", " ");
             cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
 
+            // Normalize library-style trailing articles into the title form
+            // expected by OMDb: "Matrix Resurrections, The" becomes
+            // "The Matrix Resurrections".
+            var trailingArticle = Regex.Match(
+                cleaned,
+                @"^(.+),\s*(The|A|An)$",
+                RegexOptions.IgnoreCase);
+
+            if (trailingArticle.Success)
+            {
+                cleaned =
+                    $"{trailingArticle.Groups[2].Value} {trailingArticle.Groups[1].Value}";
+            }
+
             movie.Title = cleaned;
         }
 

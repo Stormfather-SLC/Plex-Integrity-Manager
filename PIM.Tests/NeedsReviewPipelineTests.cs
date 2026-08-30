@@ -38,7 +38,10 @@ public sealed class NeedsReviewPipelineTests
         RunDecisionAndPreviewPipeline(movie);
 
         Assert.True(movie.NeedsReview);
-        Assert.Contains("IMDb ID found, but OMDb lookup failed", movie.ReviewReason);
+        Assert.Contains("Incorrect IMDb ID", movie.ReviewReason);
+        Assert.Equal(
+            MetadataLookupFailureType.OmdbError,
+            movie.MetadataLookupFailureType);
         Assert.False(movie.ApprovedForCommit);
         Assert.NotNull(movie.TargetPath);
     }

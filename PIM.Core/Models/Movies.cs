@@ -34,6 +34,20 @@ namespace PIM.Core.Models
         public string? ReviewReason { get; set; }
 
         /// <summary>
+        /// Review reason currently owned by metadata identification. Keeping
+        /// this separate lets retries replace transient metadata findings
+        /// without clearing duplicate, edition, conflict, or human findings.
+        /// </summary>
+        public string? MetadataReviewReason { get; set; }
+
+        public MetadataLookupFailureType MetadataLookupFailureType { get; set; }
+
+        public string? MetadataLookupFailureDetail { get; set; }
+
+        public bool HasMetadataReviewReason =>
+            SplitReviewReasons(ReviewReason).Any(IsMetadataReviewReason);
+
+        /// <summary>
         /// Marks the movie for human review without discarding an earlier reason.
         /// Automated pipeline stages may add review requirements, but only an
         /// explicit human-resolution workflow should clear them.
@@ -65,6 +79,84 @@ namespace PIM.Core.Models
             }
 
             ReviewReason = string.Join(" | ", existingReasons);
+        }
+
+        public void SetMetadataReview(
+            string reason,
+            MetadataLookupFailureType failureType,
+            string? failureDetail = null)
+        {
+            ClearMetadataReviewReasons();
+            MetadataReviewReason = reason;
+            MetadataLookupFailureType = failureType;
+            MetadataLookupFailureDetail = failureDetail;
+            RequireReview(reason);
+        }
+
+        public void ClearMetadataReviewReasons()
+        {
+            var reasons = SplitReviewReasons(ReviewReason);
+            var removedMetadataReason = reasons.RemoveAll(IsMetadataReviewReason) > 0;
+
+            ReviewReason = reasons.Count == 0
+                ? null
+                : string.Join(" | ", reasons);
+
+            if (removedMetadataReason)
+                NeedsReview = reasons.Count > 0;
+
+            MetadataReviewReason = null;
+            MetadataLookupFailureType = MetadataLookupFailureType.None;
+            MetadataLookupFailureDetail = null;
+        }
+
+        private bool IsMetadataReviewReason(string reason)
+        {
+            if (!string.IsNullOrWhiteSpace(MetadataReviewReason) &&
+                string.Equals(
+                    reason,
+                    MetadataReviewReason,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return reason.Equals(
+                       "IMDb ID could not be determined",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   reason.Equals(
+                       "Missing IMDb ID",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   reason.Equals(
+                       "Missing required metadata for rename",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   reason.Equals(
+                       "IMDb ID found, but OMDb lookup failed",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   reason.StartsWith(
+                       "IMDb ID matched, but OMDb did not return",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   reason.StartsWith(
+                       "Low confidence metadata match",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   reason.StartsWith(
+                       "OMDb lookup failed:",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   reason.StartsWith(
+                       "OMDb lookup not attempted:",
+                       StringComparison.OrdinalIgnoreCase) ||
+                   reason.StartsWith(
+                       "OMDb lookup succeeded but did not return",
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static List<string> SplitReviewReasons(string? reasons)
+        {
+            return (reasons ?? string.Empty).Split(
+                    " | ",
+                    StringSplitOptions.RemoveEmptyEntries |
+                    StringSplitOptions.TrimEntries)
+                .ToList();
         }
 
         // =========================================================

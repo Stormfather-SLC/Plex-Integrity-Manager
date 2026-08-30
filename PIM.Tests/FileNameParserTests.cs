@@ -43,4 +43,36 @@ public sealed class FileNameParserTests
         Assert.Equal(2021, movie.Year);
         Assert.Equal("tt0087182", movie.ImdbId);
     }
+
+    [Theory]
+    [InlineData("Inception.2010.1080p.mkv", "Inception", 2010)]
+    [InlineData("Interstellar.2014.720p.mkv", "Interstellar", 2014)]
+    [InlineData("The.Dark.Knight.2008.mkv", "The Dark Knight", 2008)]
+    public void Parse_BasicTitleYearFiles_ProducesOmdbLookupInput(
+        string fileName,
+        string expectedTitle,
+        int expectedYear)
+    {
+        var movie = new Movie { FileName = fileName };
+
+        _parser.Parse(movie);
+
+        Assert.Equal(expectedTitle, movie.Title);
+        Assert.Equal(expectedYear, movie.Year);
+    }
+
+    [Fact]
+    public void Parse_TrailingArticleTitle_NormalizesForOmdbLookup()
+    {
+        var movie = new Movie
+        {
+            FileName = "Matrix Resurrections, The 2021 - Edited .mp4"
+        };
+
+        _parser.Parse(movie);
+
+        Assert.Equal("The Matrix Resurrections", movie.Title);
+        Assert.Equal(2021, movie.Year);
+        Assert.Equal("Edited", movie.VersionTag);
+    }
 }
