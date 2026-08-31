@@ -18,61 +18,151 @@ internal static class TitleSpellingCandidateGenerator
 
         var candidates = new List<SpellingCandidate>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var matches = Regex.Matches(title, @"[A-Za-z0-9]+");
+        var matches = Regex.Matches(title, @"[A-Za-z0-9]+")
+            .Cast<Match>()
+            .Where(match =>
+                match.Value.Length >= 4 &&
+                !match.Value.Any(char.IsDigit))
+            .ToList();
 
-        foreach (Match match in matches)
+        // Prefer tokens the dictionary already considers misspelled. Only if
+        // those produce no correction do we consider a dictionary-valid word
+        // whose adjacent letters may have been transposed (for example,
+        // "Loin" -> "Lion").
+        foreach (var match in matches.Where(match =>
+                     !IsDictionaryWord(match.Value.ToLowerInvariant())))
         {
-            var token = match.Value;
+            AddAdjacentTranspositions(title, match, candidates, seen);
 
-            // Short and alphanumeric tokens are common in stylized movie titles
-            // (WALL-E, Se7en, M3GAN). Do not attempt to rewrite them.
-            if (token.Length < 4 || token.Any(char.IsDigit))
-                continue;
+            if (candidates.Count >= MaximumTitleCandidates)
+                return candidates;
 
-            var normalizedToken = token.ToLowerInvariant();
+            AddClosestDictionarySuggestions(title, match, candidates, seen);
 
-            if (Dictionary.Value.Lookup(
-                    normalizedToken,
-                    global::SymSpell.Verbosity.Closest,
-                    MaximumEditDistance).Any(suggestion =>
-                        suggestion.distance == 0))
-            {
-                continue;
-            }
+            if (candidates.Count >= MaximumTitleCandidates)
+                return candidates;
+        }
 
-            var suggestions = Dictionary.Value.Lookup(
-                    normalizedToken,
-                    global::SymSpell.Verbosity.Closest,
-                    MaximumEditDistance)
-                .Where(suggestion =>
-                    suggestion.distance == MaximumEditDistance &&
-                    !suggestion.term.Equals(
-                        normalizedToken,
-                        StringComparison.OrdinalIgnoreCase))
-                .Take(MaximumTitleCandidates);
+        foreach (var match in matches.Where(match =>
+                     IsDictionaryWord(match.Value.ToLowerInvariant())))
+        {
+            AddAdjacentTranspositions(title, match, candidates, seen);
 
-            foreach (var suggestion in suggestions)
-            {
-                var correctedToken = PreserveCase(token, suggestion.term);
-                var correctedTitle = string.Concat(
-                    title.AsSpan(0, match.Index),
-                    correctedToken,
-                    title.AsSpan(match.Index + match.Length));
-
-                if (!seen.Add(correctedTitle))
-                    continue;
-
-                candidates.Add(new SpellingCandidate(
-                    correctedTitle,
-                    suggestion.distance));
-
-                if (candidates.Count == MaximumTitleCandidates)
-                    return candidates;
-            }
+            if (candidates.Count >= MaximumTitleCandidates)
+                return candidates;
         }
 
         return candidates;
     }
+
+    private static void AddAdjacentTranspositions(
+        string title,
+        Match match,
+        ICollection<SpellingCandidate> candidates,
+        ISet<string> seen)
+    {
+        var token = match.Value;
+        var normalizedToken = token.ToLowerInvariant();
+        var transpositions = new List<(string Term, long Count)>();
+
+        for (var index = 0; index < normalizedToken.Length - 1; index++)
+        {
+            if (normalizedToken[index] == normalizedToken[index + 1])
+                continue;
+
+            var characters = normalizedToken.ToCharArray();
+            (characters[index], characters[index + 1]) =
+                (characters[index + 1], characters[index]);
+            var transposed = new string(characters);
+            var count = GetDictionaryCount(transposed);
+
+            // The general dictionary contains "incredible" but not the movie
+            // title's plural "incredibles". Accept the transposition as locally
+            // plausible when its singular form is a known word.
+            if (count == 0 && transposed.EndsWith('s') && transposed.Length > 4)
+                count = GetDictionaryCount(transposed[..^1]);
+
+            if (count > 0)
+                transpositions.Add((transposed, count));
+        }
+
+        foreach (var transposition in transpositions
+                     .OrderByDescending(item => item.Count)
+                     .ThenBy(item => item.Term, StringComparer.OrdinalIgnoreCase))
+        {
+            AddCandidate(
+                title,
+                match,
+                transposition.Term,
+                candidates,
+                seen);
+
+            if (candidates.Count >= MaximumTitleCandidates)
+                return;
+        }
+    }
+
+    private static void AddClosestDictionarySuggestions(
+        string title,
+        Match match,
+        ICollection<SpellingCandidate> candidates,
+        ISet<string> seen)
+    {
+        var normalizedToken = match.Value.ToLowerInvariant();
+        var suggestions = Dictionary.Value.Lookup(
+                normalizedToken,
+                global::SymSpell.Verbosity.Closest,
+                MaximumEditDistance)
+            .Where(suggestion =>
+                suggestion.distance == MaximumEditDistance &&
+                !suggestion.term.Equals(
+                    normalizedToken,
+                    StringComparison.OrdinalIgnoreCase))
+            .Take(MaximumTitleCandidates);
+
+        foreach (var suggestion in suggestions)
+        {
+            AddCandidate(
+                title,
+                match,
+                suggestion.term,
+                candidates,
+                seen);
+
+            if (candidates.Count >= MaximumTitleCandidates)
+                return;
+        }
+    }
+
+    private static void AddCandidate(
+        string title,
+        Match match,
+        string correctedToken,
+        ICollection<SpellingCandidate> candidates,
+        ISet<string> seen)
+    {
+        if (candidates.Count >= MaximumTitleCandidates)
+            return;
+
+        var correctedTitle = string.Concat(
+            title.AsSpan(0, match.Index),
+            PreserveCase(match.Value, correctedToken),
+            title.AsSpan(match.Index + match.Length));
+
+        if (seen.Add(correctedTitle))
+            candidates.Add(new SpellingCandidate(correctedTitle, MaximumEditDistance));
+    }
+
+    private static bool IsDictionaryWord(string token) =>
+        GetDictionaryCount(token) > 0;
+
+    private static long GetDictionaryCount(string token) =>
+        Dictionary.Value.Lookup(
+                token,
+                global::SymSpell.Verbosity.Top,
+                maxEditDistance: 0)
+            .FirstOrDefault(suggestion => suggestion.distance == 0)
+            ?.count ?? 0;
 
     private static global::SymSpell CreateDictionary()
     {

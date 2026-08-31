@@ -148,8 +148,12 @@ namespace PIM.Infrastructure.Metadata
                         "False",
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    if (ClassifyOmdbFailure(data.Error) ==
-                        MetadataLookupFailureType.MovieNotFound)
+                    var unresolvedInitialIdentity = hasImdbId
+                        ? IsUnresolvedImdbLookupFailure(data.Error)
+                        : ClassifyOmdbFailure(data.Error) ==
+                          MetadataLookupFailureType.MovieNotFound;
+
+                    if (unresolvedInitialIdentity)
                     {
                         if (hasImdbId)
                         {
@@ -413,7 +417,8 @@ namespace PIM.Infrastructure.Metadata
                     movie,
                     parsedTitle,
                     parsedYear,
-                    spellingCandidates) == FallbackOutcome.Completed)
+                    spellingCandidates,
+                    yearRelaxed: false) == FallbackOutcome.Completed)
             {
                 return;
             }
@@ -423,6 +428,17 @@ namespace PIM.Infrastructure.Metadata
                     parsedTitle,
                     parsedYear,
                     yearRelaxed: false) == FallbackOutcome.Completed)
+            {
+                return;
+            }
+
+            if (parsedYear.HasValue &&
+                await TrySpellingCorrectedLookupsAsync(
+                    movie,
+                    parsedTitle,
+                    parsedYear,
+                    spellingCandidates,
+                    yearRelaxed: true) == FallbackOutcome.Completed)
             {
                 return;
             }
@@ -444,6 +460,9 @@ namespace PIM.Infrastructure.Metadata
             string parsedTitle,
             int? parsedYear)
         {
+            _logger.LogInformation(
+                "Retrying exact OMDb title lookup without the filename year.");
+
             var url =
                 $"https://www.omdbapi.com/?t={Uri.EscapeDataString(parsedTitle)}" +
                 $"&type=movie&apikey={_apiKey}";
@@ -501,10 +520,16 @@ namespace PIM.Infrastructure.Metadata
             Movie movie,
             string parsedTitle,
             int? parsedYear,
-            IReadOnlyList<TitleSpellingCandidateGenerator.SpellingCandidate> spellingCandidates)
+            IReadOnlyList<TitleSpellingCandidateGenerator.SpellingCandidate> spellingCandidates,
+            bool yearRelaxed)
         {
             if (spellingCandidates.Count == 0)
                 return FallbackOutcome.NoCandidate;
+
+            _logger.LogInformation(
+                "Trying {CandidateCount} bounded spelling candidates ({YearPolicy}).",
+                spellingCandidates.Count,
+                yearRelaxed ? "year relaxed" : "year constrained");
 
             var matches = new List<SpellingMatch>();
 
@@ -513,7 +538,7 @@ namespace PIM.Infrastructure.Metadata
                 var url =
                     $"https://www.omdbapi.com/?t={Uri.EscapeDataString(spellingCandidate.Title)}";
 
-                if (parsedYear.HasValue)
+                if (!yearRelaxed && parsedYear.HasValue)
                     url += $"&y={parsedYear.Value}";
 
                 url += $"&type=movie&apikey={_apiKey}";
@@ -572,7 +597,8 @@ namespace PIM.Infrastructure.Metadata
                 ? 100
                 : winner.Candidate.Confidence - runnerUp.Candidate.Confidence;
             var hasClearWinner = winnerMargin >= MinimumWinnerMargin;
-            var canAutomaticallyAccept = winner.Candidate.YearMatches &&
+            var canAutomaticallyAccept = !yearRelaxed &&
+                                         winner.Candidate.YearMatches &&
                                          winner.Candidate.TitleSimilarity >=
                                          MinimumFuzzyTitleSimilarity &&
                                          winner.Candidate.Confidence >=
@@ -586,8 +612,12 @@ namespace PIM.Infrastructure.Metadata
                     : !hasClearWinner
                         ? MetadataLookupFailureType.AmbiguousFuzzyCandidates
                         : MetadataLookupFailureType.FuzzyCandidateNeedsReview;
-                var explanation = winner.Candidate.YearConflicts
-                    ? "the candidate release year conflicts with the parsed year"
+                var explanation = yearRelaxed && winner.Candidate.YearConflicts
+                    ? $"the filename year is {parsedYear} but OMDb reports {winner.Candidate.Year}; the candidate was found after retrying the spelling correction without the year"
+                    : yearRelaxed
+                        ? "the candidate was found only after retrying the spelling correction without the year"
+                    : winner.Candidate.YearConflicts
+                        ? "the candidate release year conflicts with the parsed year"
                     : !hasClearWinner
                         ? "another spelling correction produced a candidate that scored too closely"
                         : "the spelling-corrected candidate did not meet the automatic-match threshold";
@@ -597,8 +627,12 @@ namespace PIM.Infrastructure.Metadata
                     winner.Candidate,
                     failureType,
                     explanation,
-                    MetadataMatchOrigin.SpellCorrectedTitleYear,
-                    $"Candidate found after a local one-edit spelling correction from '{parsedTitle}' to '{winner.Spelling.Title}'.");
+                    yearRelaxed
+                        ? MetadataMatchOrigin.YearRelaxedSpellCorrection
+                        : MetadataMatchOrigin.SpellCorrectedTitleYear,
+                    yearRelaxed
+                        ? $"Candidate found after a local one-edit spelling correction from '{parsedTitle}' to '{winner.Spelling.Title}' and retrying without the filename year; manual confirmation is required."
+                        : $"Candidate found after a local one-edit spelling correction from '{parsedTitle}' to '{winner.Spelling.Title}'.");
                 return FallbackOutcome.Completed;
             }
 
@@ -1163,6 +1197,20 @@ namespace PIM.Infrastructure.Metadata
             }
 
             return MetadataLookupFailureType.OmdbError;
+        }
+
+        private static bool IsUnresolvedImdbLookupFailure(string? error)
+        {
+            var normalizedError = error?.Trim();
+
+            return ClassifyOmdbFailure(normalizedError) ==
+                       MetadataLookupFailureType.MovieNotFound ||
+                   normalizedError?.StartsWith(
+                       "Incorrect IMDb ID",
+                       StringComparison.OrdinalIgnoreCase) == true ||
+                   normalizedError?.Equals(
+                       "Error getting data.",
+                       StringComparison.OrdinalIgnoreCase) == true;
         }
 
         private void MarkTimeoutFailure(Movie movie)

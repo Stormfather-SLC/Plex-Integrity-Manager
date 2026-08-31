@@ -7,6 +7,7 @@ public enum MetadataMatchOrigin
     ExactTitleYear,
     YearRelaxedTitle,
     SpellCorrectedTitleYear,
+    YearRelaxedSpellCorrection,
     FuzzySearchTitleYear,
     YearRelaxedFuzzySearch
 }
