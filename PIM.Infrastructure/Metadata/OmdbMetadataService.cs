@@ -636,6 +636,16 @@ namespace PIM.Infrastructure.Metadata
                 return FallbackOutcome.Completed;
             }
 
+            var verification = await VerifySpellingWinnerWithoutYearAsync(
+                movie,
+                parsedTitle,
+                parsedYear,
+                spellingCandidates,
+                winner.Candidate);
+
+            if (verification != ReconstructedWinnerVerification.Clear)
+                return FallbackOutcome.Completed;
+
             ApplySuccessfulResponse(
                 movie,
                 winner.Data,
@@ -656,11 +666,80 @@ namespace PIM.Infrastructure.Metadata
             return FallbackOutcome.Completed;
         }
 
+        private async Task<ReconstructedWinnerVerification>
+            VerifySpellingWinnerWithoutYearAsync(
+                Movie movie,
+                string parsedTitle,
+                int? parsedYear,
+                IReadOnlyList<TitleSpellingCandidateGenerator.SpellingCandidate> spellingCandidates,
+                ScoredCandidate constrainedWinner)
+        {
+            _logger.LogInformation(
+                "Verifying spelling winner {ImdbId} with {CandidateCount} year-relaxed spelling candidates.",
+                constrainedWinner.ImdbId,
+                spellingCandidates.Count);
+
+            foreach (var spellingCandidate in spellingCandidates)
+            {
+                var url =
+                    $"https://www.omdbapi.com/?t={Uri.EscapeDataString(spellingCandidate.Title)}" +
+                    $"&type=movie&apikey={_apiKey}";
+                var data = await FetchJsonAsync<OmdbResponse>(url, movie);
+
+                if (data == null)
+                    return ReconstructedWinnerVerification.Aborted;
+
+                if (string.IsNullOrWhiteSpace(data.Response))
+                {
+                    MarkMalformedResponse(movie);
+                    return ReconstructedWinnerVerification.Aborted;
+                }
+
+                if (data.Response.Equals("False", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (ClassifyOmdbFailure(data.Error) ==
+                        MetadataLookupFailureType.MovieNotFound)
+                    {
+                        continue;
+                    }
+
+                    MarkOmdbFailure(movie, data.Error);
+                    return ReconstructedWinnerVerification.Aborted;
+                }
+
+                if (!data.Response.Equals("True", StringComparison.OrdinalIgnoreCase) ||
+                    !TryScoreResponse(
+                        parsedTitle,
+                        parsedYear,
+                        data,
+                        spellingCandidate.EditDistance,
+                        out var candidate))
+                {
+                    MarkMalformedResponse(movie);
+                    return ReconstructedWinnerVerification.Aborted;
+                }
+
+                if (!IsMaterialReconstructedCompetitor(constrainedWinner, candidate))
+                    continue;
+
+                MarkReconstructedCompetitorForReview(
+                    movie,
+                    constrainedWinner,
+                    candidate,
+                    MetadataMatchOrigin.SpellCorrectedTitleYear,
+                    "spelling correction");
+                return ReconstructedWinnerVerification.CompetitorFound;
+            }
+
+            return ReconstructedWinnerVerification.Clear;
+        }
+
         private async Task<FallbackOutcome> TryFuzzyCandidateSearchAsync(
             Movie movie,
             string parsedTitle,
             int? parsedYear,
-            bool yearRelaxed)
+            bool yearRelaxed,
+            ScoredCandidate? constrainedWinnerToVerify = null)
         {
             _logger.LogInformation(
                 "Starting bounded OMDb fuzzy candidate search ({YearPolicy}).",
@@ -765,7 +844,30 @@ namespace PIM.Infrastructure.Metadata
                 .ToList();
 
             if (rankedCandidates.Count == 0)
-                return FallbackOutcome.NoCandidate;
+            {
+                return constrainedWinnerToVerify == null
+                    ? FallbackOutcome.NoCandidate
+                    : FallbackOutcome.VerificationClear;
+            }
+
+            if (constrainedWinnerToVerify != null)
+            {
+                var competitor = rankedCandidates.FirstOrDefault(candidate =>
+                    IsMaterialReconstructedCompetitor(
+                        constrainedWinnerToVerify,
+                        candidate));
+
+                if (competitor == null)
+                    return FallbackOutcome.VerificationClear;
+
+                MarkReconstructedCompetitorForReview(
+                    movie,
+                    constrainedWinnerToVerify,
+                    competitor,
+                    MetadataMatchOrigin.FuzzySearchTitleYear,
+                    "bounded fuzzy title search");
+                return FallbackOutcome.Completed;
+            }
 
             var winner = rankedCandidates[0];
             var runnerUp = rankedCandidates.Skip(1).FirstOrDefault();
@@ -814,6 +916,16 @@ namespace PIM.Infrastructure.Metadata
                         : "Candidate found by bounded fuzzy title search with the filename year constraint retained.");
                 return FallbackOutcome.Completed;
             }
+
+            var verification = await TryFuzzyCandidateSearchAsync(
+                movie,
+                parsedTitle,
+                parsedYear,
+                yearRelaxed: true,
+                constrainedWinnerToVerify: winner);
+
+            if (verification != FallbackOutcome.VerificationClear)
+                return FallbackOutcome.Completed;
 
             await ApplyFuzzyWinnerAsync(movie, parsedTitle, parsedYear, winner);
             return FallbackOutcome.Completed;
@@ -1070,6 +1182,47 @@ namespace PIM.Infrastructure.Metadata
             movie.MetadataDiscoveryReason = discoveryReason;
             movie.SetMetadataReview(reason, failureType, explanation);
             movie.Status = "Needs Review";
+        }
+
+        private static bool IsMaterialReconstructedCompetitor(
+            ScoredCandidate constrainedWinner,
+            ScoredCandidate candidate)
+        {
+            if (candidate.ImdbId.Equals(
+                    constrainedWinner.ImdbId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var minimumCompetingSimilarity =
+                constrainedWinner.TitleSimilarity - (MinimumWinnerMargin / 100d);
+
+            return candidate.TitleSimilarity >= MinimumFuzzyTitleSimilarity &&
+                   candidate.TitleSimilarity >= minimumCompetingSimilarity;
+        }
+
+        private static void MarkReconstructedCompetitorForReview(
+            Movie movie,
+            ScoredCandidate constrainedWinner,
+            ScoredCandidate competitor,
+            MetadataMatchOrigin matchOrigin,
+            string recoveryMethod)
+        {
+            var competitorYear = competitor.Year?.ToString() ?? "year unknown";
+            var explanation =
+                $"year-relaxed verification found the materially competing identity " +
+                $"{competitor.Title} ({competitorYear}) — {competitor.ImdbId}";
+            var discoveryReason =
+                $"The year-constrained {recoveryMethod} winner was not accepted because removing the filename year revealed a different plausible movie identity.";
+
+            MarkCandidateForReview(
+                movie,
+                constrainedWinner,
+                MetadataLookupFailureType.AmbiguousFuzzyCandidates,
+                explanation,
+                matchOrigin,
+                discoveryReason);
         }
 
         private void ApplySuccessfulResponse(
@@ -1493,7 +1646,15 @@ namespace PIM.Infrastructure.Metadata
         private enum FallbackOutcome
         {
             NoCandidate,
+            VerificationClear,
             Completed
+        }
+
+        private enum ReconstructedWinnerVerification
+        {
+            Clear,
+            CompetitorFound,
+            Aborted
         }
     }
 }
