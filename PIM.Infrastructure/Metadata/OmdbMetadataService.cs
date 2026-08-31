@@ -148,15 +148,27 @@ namespace PIM.Infrastructure.Metadata
                         "False",
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    if (!hasImdbId &&
-                        ClassifyOmdbFailure(data.Error) ==
+                    if (ClassifyOmdbFailure(data.Error) ==
                         MetadataLookupFailureType.MovieNotFound)
                     {
-                        await TryRecoveryFallbackAsync(
-                            movie,
-                            parsedTitle!,
-                            parsedYear,
-                            data.Error);
+                        if (hasImdbId)
+                        {
+                            await TryInvalidImdbRecoveryAsync(
+                                movie,
+                                parsedTitle,
+                                parsedYear,
+                                originalImdbId!,
+                                data.Error);
+                        }
+                        else
+                        {
+                            await TryRecoveryFallbackAsync(
+                                movie,
+                                parsedTitle!,
+                                parsedYear,
+                                data.Error);
+                        }
+
                         return;
                     }
 
@@ -169,6 +181,17 @@ namespace PIM.Infrastructure.Metadata
                         StringComparison.OrdinalIgnoreCase))
                 {
                     MarkMalformedResponse(movie);
+                    return;
+                }
+
+                if (hasImdbId &&
+                    MarkImdbIdentityConflictIfNeeded(
+                        movie,
+                        data,
+                        parsedTitle,
+                        parsedYear,
+                        originalImdbId!))
+                {
                     return;
                 }
 
@@ -195,6 +218,159 @@ namespace PIM.Infrastructure.Metadata
             {
                 MarkNetworkFailure(movie);
             }
+        }
+
+        private async Task TryInvalidImdbRecoveryAsync(
+            Movie movie,
+            string? parsedTitle,
+            int? parsedYear,
+            string invalidImdbId,
+            string? imdbNotFoundError)
+        {
+            _logger.LogInformation(
+                "Supplied IMDb ID {ImdbId} did not resolve; attempting exact title/year recovery.",
+                invalidImdbId);
+
+            if (string.IsNullOrWhiteSpace(parsedTitle))
+            {
+                MarkLookupFailure(
+                    movie,
+                    MetadataLookupFailureType.MovieNotFound,
+                    "The supplied IMDb ID did not resolve and no parsed title was available for recovery.",
+                    "The provided IMDb ID could not be found, and no title was available for recovery.");
+                return;
+            }
+
+            var url =
+                $"https://www.omdbapi.com/?t={Uri.EscapeDataString(parsedTitle)}";
+
+            if (parsedYear.HasValue)
+                url += $"&y={parsedYear.Value}";
+
+            url += $"&type=movie&apikey={_apiKey}";
+            var data = await FetchJsonAsync<OmdbResponse>(url, movie);
+
+            if (data == null)
+                return;
+
+            if (string.IsNullOrWhiteSpace(data.Response))
+            {
+                MarkMalformedResponse(movie);
+                return;
+            }
+
+            if (data.Response.Equals("False", StringComparison.OrdinalIgnoreCase))
+            {
+                if (ClassifyOmdbFailure(data.Error) ==
+                    MetadataLookupFailureType.MovieNotFound)
+                {
+                    _logger.LogInformation(
+                        "Exact title/year recovery after unresolved IMDb ID returned movie-not-found; continuing to title-only and bounded typo recovery.");
+                    await TryRecoveryFallbackAsync(
+                        movie,
+                        parsedTitle,
+                        parsedYear,
+                        imdbNotFoundError);
+                    return;
+                }
+
+                MarkOmdbFailure(movie, data.Error);
+                return;
+            }
+
+            if (!data.Response.Equals("True", StringComparison.OrdinalIgnoreCase))
+            {
+                MarkMalformedResponse(movie);
+                return;
+            }
+
+            ApplySuccessfulResponse(
+                movie,
+                data,
+                parsedTitle,
+                parsedYear,
+                null,
+                false,
+                null,
+                MetadataMatchOrigin.ExactTitleYear,
+                $"Recovered by exact title/year after supplied IMDb ID {invalidImdbId} did not resolve.");
+
+            _logger.LogInformation(
+                "Recovered metadata identity {RecoveredImdbId} by exact title/year after supplied IMDb ID {InvalidImdbId} did not resolve.",
+                movie.ImdbId,
+                invalidImdbId);
+        }
+
+        private bool MarkImdbIdentityConflictIfNeeded(
+            Movie movie,
+            OmdbResponse data,
+            string? parsedTitle,
+            int? parsedYear,
+            string originalImdbId)
+        {
+            var metadataTitle = NormalizeMetadataValue(data.Title);
+            var metadataYear = ParseYear(data.Year);
+            var returnedImdbId = NormalizeMetadataValue(data.ImdbID) ?? originalImdbId;
+            var titleConflicts = !string.IsNullOrWhiteSpace(parsedTitle) &&
+                                 !string.IsNullOrWhiteSpace(metadataTitle) &&
+                                 !NormalizeTitle(parsedTitle).Equals(
+                                     NormalizeTitle(metadataTitle),
+                                     StringComparison.Ordinal);
+            var yearConflicts = parsedYear.HasValue &&
+                                metadataYear.HasValue &&
+                                parsedYear.Value != metadataYear.Value;
+
+            if (!titleConflicts && !yearConflicts)
+            {
+                _logger.LogInformation(
+                    "Supplied IMDb ID {ImdbId} resolved and validated against the parsed title/year.",
+                    originalImdbId);
+                return false;
+            }
+
+            var reviewReason = titleConflicts && yearConflicts
+                ? "The provided IMDb ID does not match the movie title or year provided."
+                : titleConflicts
+                    ? "The provided IMDb ID does not match the movie title provided."
+                    : "The provided IMDb ID does not match the movie year provided.";
+            var providedIdentity =
+                $"{parsedTitle ?? "title unavailable"} " +
+                $"({parsedYear?.ToString() ?? "year unknown"}) — {originalImdbId}";
+            var resolvedIdentity =
+                $"{metadataTitle ?? "title unavailable"} " +
+                $"({metadataYear?.ToString() ?? "year unknown"}) — {returnedImdbId}";
+            var diagnostic =
+                $"Provided: {providedIdentity}. IMDb ID identifies: {resolvedIdentity}.";
+
+            movie.MetadataFetched = false;
+            movie.MetadataMatchedByImdbId = true;
+            movie.SuggestedTitle = metadataTitle;
+            movie.SuggestedYear = metadataYear;
+            movie.SuggestedImdbId = returnedImdbId;
+            movie.MatchConfidence = CalculateConfidence(
+                parsedTitle,
+                parsedYear,
+                metadataTitle ?? string.Empty,
+                metadataYear,
+                true);
+            movie.IsFuzzyMatch = false;
+            movie.MetadataMatchOrigin = MetadataMatchOrigin.ImdbId;
+            movie.MetadataDiscoveryReason =
+                "The supplied IMDb ID resolved, but its canonical identity conflicts with the parsed filename identity.";
+            movie.SetMetadataReview(
+                reviewReason,
+                MetadataLookupFailureType.ImdbIdentityConflict,
+                diagnostic);
+            movie.Status = "Needs Review";
+
+            _logger.LogWarning(
+                "IMDb identity conflict for supplied ID {ImdbId}. Parsed title/year: '{ParsedTitle}' ({ParsedYear}); OMDb title/year: '{MetadataTitle}' ({MetadataYear}).",
+                originalImdbId,
+                parsedTitle,
+                parsedYear,
+                metadataTitle,
+                metadataYear);
+            return true;
         }
 
         private async Task TryRecoveryFallbackAsync(
@@ -924,9 +1100,8 @@ namespace PIM.Infrastructure.Metadata
 
             movie.MetadataFetched = true;
 
-            // An IMDb ID embedded in the source path is the authoritative movie
-            // identity. Once OMDb successfully resolves that ID, parsed title/year
-            // differences are diagnostic only and must not force manual review.
+            // IMDb matches reach this point only after their canonical title/year
+            // have been validated against the parsed filename identity.
             if (hasImdbId)
             {
                 movie.Status = movie.NeedsReview
@@ -1167,6 +1342,7 @@ namespace PIM.Infrastructure.Metadata
 
             var normalized = title.ToLowerInvariant();
 
+            normalized = normalized.Replace("&", " and ", StringComparison.Ordinal);
             normalized = Regex.Replace(normalized, @"\b(the|a|an)\b", " ");
             normalized = Regex.Replace(normalized, @"[^a-z0-9]+", " ");
             normalized = Regex.Replace(normalized, @"\s+", " ").Trim();
