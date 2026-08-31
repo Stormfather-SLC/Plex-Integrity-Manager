@@ -6,5 +6,5 @@ public interface IDryRunPreviewService
 {
     DryRunPreviewResult BuildPreview(
         IEnumerable<Movie> movies,
-        LibraryGoal libraryGoal = LibraryGoal.Consolidation);
+        LibraryGoal libraryGoal = LibraryGoal.OrganizeNewMovies);
 }

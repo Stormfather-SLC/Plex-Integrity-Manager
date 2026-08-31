@@ -2,7 +2,7 @@
 
 public class DryRunPreviewResult
 {
-    public LibraryGoal LibraryGoal { get; set; } = LibraryGoal.Consolidation;
+    public LibraryGoal LibraryGoal { get; set; } = LibraryGoal.OrganizeNewMovies;
 
     public int TotalFiles { get; set; }
     public int ReadyToMoveCount { get; set; }

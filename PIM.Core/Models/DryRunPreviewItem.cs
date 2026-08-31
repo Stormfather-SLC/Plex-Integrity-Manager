@@ -12,6 +12,32 @@ public class DryRunPreviewItem
 
     public string Status { get; set; } = string.Empty;
 
+    public string ReviewReason { get; set; } = string.Empty;
+
+    public string ParsedTitle { get; set; } = string.Empty;
+
+    public int? ParsedYear { get; set; }
+
+    public string ParsedImdbId { get; set; } = string.Empty;
+
+    public string Edition { get; set; } = string.Empty;
+
+    public double? MetadataConfidence { get; set; }
+
+    public string MetadataReviewReason { get; set; } = string.Empty;
+
+    public string MetadataFailureDetail { get; set; } = string.Empty;
+
+    public string SuggestedTitle { get; set; } = string.Empty;
+
+    public int? SuggestedYear { get; set; }
+
+    public string SuggestedImdbId { get; set; } = string.Empty;
+
+    public MetadataMatchOrigin MetadataMatchOrigin { get; set; }
+
+    public string MetadataDiscoveryReason { get; set; } = string.Empty;
+
     public string CssClass { get; set; } = string.Empty;
 
     public bool IsDuplicate { get; set; }
@@ -49,4 +75,8 @@ public class DryRunPreviewItem
 
     public bool HasPathComparisonContext =>
         HasAnyConflict || IsPlexTrackedMigration;
+
+    public bool HasMetadataSuggestion =>
+        !string.IsNullOrWhiteSpace(SuggestedTitle) &&
+        !string.IsNullOrWhiteSpace(SuggestedImdbId);
 }

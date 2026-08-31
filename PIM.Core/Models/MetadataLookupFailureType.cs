@@ -14,6 +14,7 @@ public enum MetadataLookupFailureType
     MalformedResponse,
     MissingRequiredFields,
     LowConfidence,
+    ImdbIdentityConflict,
     FuzzyCandidateNeedsReview,
     AmbiguousFuzzyCandidates,
     FuzzyCandidateYearConflict
