@@ -846,6 +846,23 @@
                                             {
                                                 <div><strong>Duplicate decision:</strong> @(movie.KeepRecommended ? "Recommended copy" : "Not selected as the preferred copy")</div>
                                             }
+                                            @if (movie.HasSuspiciousFileNameReview)
+                                            {
+                                                <div class="mt-2 p-2 bg-light border rounded">
+                                                    <div>
+                                                        This file name is unusually long (@(movie.FileName?.Length ?? 0) characters), which can mean a sample, a bundle, or a mislabeled file.
+                                                        Check the file, then confirm it is the movie shown above.
+                                                    </div>
+                                                    <form method="post" asp-page-handler="ConfirmFileName" class="mt-1">
+                                                        @Html.AntiForgeryToken()
+                                                        <input type="hidden" name="movieId" value="@movie.Id" />
+                                                        <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
+                                                        <button type="submit" class="btn btn-sm btn-primary">
+                                                            Confirm File Name
+                                                        </button>
+                                                    </form>
+                                                </div>
+                                            }
                                             @if (movie.HasDuplicateTieReview)
                                             {
                                                 <div class="mt-2 p-2 bg-light border rounded">
