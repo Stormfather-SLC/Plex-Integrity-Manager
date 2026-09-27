@@ -98,6 +98,58 @@ public sealed class IndexModelSafetyTests
     }
 
     [Fact]
+    public void UserSettingsLocation_DefaultsToLocalAppDataAndHonorsOverride()
+    {
+        var empty = new ConfigurationBuilder().Build();
+        Assert.Equal(
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Plex Integrity Manager"),
+            UserSettingsLocation.GetDirectory(empty));
+
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configured = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [UserSettingsLocation.ConfigurationKey] = workspace.Root + Path.DirectorySeparatorChar + "Settings"
+            })
+            .Build();
+        Assert.Equal(
+            Path.Combine(workspace.Root, "Settings"),
+            UserSettingsLocation.GetDirectory(configured));
+    }
+
+    [Fact]
+    public void SaveSettings_WritesOnlyToTheConfiguredFolder_AndDestinationChangeReusesMetadata()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var settingsDirectory = Path.Combine(workspace.Root, "Settings");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        configuration[UserSettingsLocation.ConfigurationKey] = settingsDirectory;
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var metadata = new CountingMetadataService();
+        var plan = new RecordingPlanService();
+        var model = CreateModel(store, configuration, profile, metadata: metadata, plan: plan);
+        var newDestination = Path.Combine(workspace.Root, "New Destination");
+        model.ScanPath = workspace.SourceRoot;
+        model.OutputPath = newDestination;
+        model.LibraryGoal = LibraryGoal.OrganizeNewMovies;
+
+        model.OnPostSaveSettings();
+
+        var settingsFile = Path.Combine(settingsDirectory, "library-settings.json");
+        Assert.True(File.Exists(settingsFile));
+        Assert.Contains("New Destination", File.ReadAllText(settingsFile));
+        Assert.Equal(1, plan.CallCount);
+        Assert.Equal(0, metadata.CallCount);
+        Assert.True(store.TryGetMovies(out var movies));
+        Assert.StartsWith(newDestination, Assert.Single(movies).TargetPath);
+    }
+
+    [Fact]
     public async Task MovieList_ShowsErrorsThenNeedsReviewBeforeReadyMovies()
     {
         using var workspace = new TempWorkspace("PIM-Index-Tests");

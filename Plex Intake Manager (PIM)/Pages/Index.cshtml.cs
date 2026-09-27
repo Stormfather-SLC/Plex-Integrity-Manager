@@ -619,9 +619,7 @@ namespace PIM.Web.Pages
                     updatedSettings,
                     new JsonSerializerOptions { WriteIndented = true });
 
-                var settingsDirectory = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Plex Integrity Manager");
+                var settingsDirectory = UserSettingsLocation.GetDirectory(_config);
                 Directory.CreateDirectory(settingsDirectory);
 
                 var settingsPath = Path.Combine(

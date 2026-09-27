@@ -10,9 +10,7 @@ using PIM.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var userSettingsDirectory = Path.Combine(
-    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-    "Plex Integrity Manager");
+var userSettingsDirectory = UserSettingsLocation.GetDirectory(builder.Configuration);
 Directory.CreateDirectory(userSettingsDirectory);
 
 // Mutable library settings belong outside the source-controlled project.

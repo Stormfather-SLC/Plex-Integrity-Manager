@@ -50,6 +50,8 @@ dotnet test "PIM.Tests\PIM.Tests.csproj" --configuration Debug
 dotnet run --project "Plex Intake Manager (PIM)\PIM.Web.csproj" --launch-profile http
 ```
 
+To look at the UI without touching the owner's settings, media, OMDb, or Plex, run an isolated instance: set `ASPNETCORE_ENVIRONMENT=Production` (so User Secrets are not loaded), point `PIM__UserSettingsDirectory`, `PIM__ProfileDataDirectory`, `PIM__WorkflowStateDirectory`, and `PIM__JournalDirectory` at a new temporary folder, set `PIM__ScanPath`/`PIM__OutputPath` to temporary folders, and set `Omdb__ApiKey` and `Plex__Token` to empty strings. Do not click Save Settings against real paths.
+
 For release-equivalent verification, use `--configuration Release`. Do not use `Start-PIM.ps1` unless the owner explicitly approves its `git pull`. Development HTTPS requires a valid local ASP.NET Core development certificate; the `http` launch profile is acceptable for loopback-only development.
 
 ## C# and Razor Pages conventions
