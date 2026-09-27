@@ -123,6 +123,12 @@ namespace PIM.Infrastructure.Services
                 // IsAlternateVersion is a decision flag, so it is recalculated below.
                 movie.IsAlternateVersion = false;
 
+                // The tie finding is owned by this service and fully recomputed
+                // below, so an outdated one (for example after a copy was
+                // re-identified as a different movie) must not linger. Review
+                // reasons from every other stage stay sticky.
+                movie.ClearDuplicateTieReview();
+
             }
         }
 

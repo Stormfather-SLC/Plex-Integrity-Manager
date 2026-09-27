@@ -123,6 +123,66 @@ public sealed class DuplicateChoiceTests
     }
 
     [Fact]
+    public void TieThatNoLongerExists_IsClearedWhenDuplicatesAreRecalculated()
+    {
+        var (first, second) = CreateTiedPair();
+        var movies = new List<Movie> { first, second };
+        var duplicates = new DuplicateService();
+        duplicates.Process(movies);
+        Assert.True(first.HasDuplicateTieReview);
+
+        // The second file turns out to be a different movie (for example after
+        // the user enters its real IMDb ID), so the first is no longer tied.
+        second.ImdbId = "tt3030303";
+        duplicates.Process(movies);
+
+        Assert.False(first.HasDuplicateTieReview);
+        Assert.False(first.NeedsReview);
+        Assert.False(first.IsDuplicate);
+        Assert.True(first.ApprovedForCommit);
+        Assert.False(second.HasDuplicateTieReview);
+        Assert.True(second.ApprovedForCommit);
+    }
+
+    [Fact]
+    public void TieThatStillExists_IsKeptWhenDuplicatesAreRecalculated()
+    {
+        var (first, second) = CreateTiedPair();
+        var movies = new List<Movie> { first, second };
+        var duplicates = new DuplicateService();
+
+        duplicates.Process(movies);
+        duplicates.Process(movies);
+
+        Assert.All(movies, movie =>
+        {
+            Assert.True(movie.HasDuplicateTieReview);
+            Assert.False(movie.ApprovedForCommit);
+        });
+        Assert.Equal(
+            "No clear best file for Standard Version",
+            first.ReviewReason);
+    }
+
+    [Fact]
+    public void RecalculatingATie_KeepsReviewReasonsFromOtherStages()
+    {
+        var (first, second) = CreateTiedPair();
+        first.RequireReview("Plex library conflict: already in Plex");
+        var movies = new List<Movie> { first, second };
+        var duplicates = new DuplicateService();
+        duplicates.Process(movies);
+
+        second.ImdbId = "tt3030303";
+        duplicates.Process(movies);
+
+        Assert.False(first.HasDuplicateTieReview);
+        Assert.True(first.NeedsReview);
+        Assert.Equal("Plex library conflict: already in Plex", first.ReviewReason);
+        Assert.False(first.ApprovedForCommit);
+    }
+
+    [Fact]
     public void ManualChoice_ChangesThePlanFingerprint()
     {
         var (first, second) = CreateTiedPair();
