@@ -277,6 +277,13 @@ namespace PIM.Core.Models
         public bool CanAcceptMetadataSuggestion =>
             HasMetadataSuggestion && SuggestedYear.HasValue;
 
+        /// <summary>
+        /// Manual IMDb ID entry is offered only while identity is unresolved.
+        /// </summary>
+        public bool CanEnterImdbId =>
+            !HasError &&
+            (HasMetadataReviewReason || string.IsNullOrWhiteSpace(ImdbId));
+
         public double? MatchConfidence { get; set; }
 
         public bool IsFuzzyMatch { get; set; }
