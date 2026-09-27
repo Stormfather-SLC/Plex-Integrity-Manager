@@ -98,6 +98,77 @@ public sealed class IndexModelSafetyTests
     }
 
     [Fact]
+    public async Task MovieList_ShowsErrorsThenNeedsReviewBeforeReadyMovies()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var ready = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        ready.Title = "Aardvark";
+        var review = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        review.Title = "Zebra";
+        review.RequireReview("Low confidence metadata match");
+        var error = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        error.Title = "Middle";
+        error.ErrorMessage = "Source file could not be read.";
+        store.SaveMovies(new List<Movie> { ready, review, error }, workspace.SourceRoot);
+        var model = CreateModel(store, configuration, profile);
+
+        await model.OnGetAsync();
+
+        Assert.Equal(
+            new[] { error.Id, review.Id, ready.Id },
+            model.Movies.Select(movie => movie.Id));
+    }
+
+    [Fact]
+    public async Task RecommendedOnlyFilter_NeverHidesNeedsReviewOrErrorDuplicates()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var skippedDuplicate = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        skippedDuplicate.IsDuplicate = true;
+        var reviewDuplicate = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        reviewDuplicate.IsDuplicate = true;
+        reviewDuplicate.RequireReview("Duplicate needs a human decision");
+        var errorDuplicate = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        errorDuplicate.IsDuplicate = true;
+        errorDuplicate.ErrorMessage = "Source file could not be read.";
+        store.SaveMovies(
+            new List<Movie> { skippedDuplicate, reviewDuplicate, errorDuplicate },
+            workspace.SourceRoot);
+        var model = CreateModel(store, configuration, profile);
+
+        await model.OnGetAsync(showOnlyRecommended: true);
+
+        Assert.DoesNotContain(model.Movies, movie => movie.Id == skippedDuplicate.Id);
+        Assert.Contains(model.Movies, movie => movie.Id == reviewDuplicate.Id);
+        Assert.Contains(model.Movies, movie => movie.Id == errorDuplicate.Id);
+    }
+
+    [Fact]
+    public async Task PreviewTree_IsBuiltForReviewItemsEvenWithoutTargetPaths()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var review = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        review.TargetPath = null;
+        review.RequireReview("IMDb ID could not be determined");
+        store.SaveMovies(new List<Movie> { review }, workspace.SourceRoot);
+        var model = CreateModel(store, configuration, profile);
+
+        await model.OnGetAsync();
+
+        Assert.NotNull(model.PreviewTree);
+        Assert.Contains(model.PreviewTree!.Children, node => node.Name == "Needs Review");
+    }
+
+    [Fact]
     public async Task Restart_ScanAndDryRunPreviewAreShownWithoutRescanOrMetadataCalls()
     {
         using var workspace = new TempWorkspace("PIM-Index-Tests");

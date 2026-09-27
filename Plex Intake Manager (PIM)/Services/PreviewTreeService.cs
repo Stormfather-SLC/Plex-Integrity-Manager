@@ -20,9 +20,12 @@ namespace PIM.Web.Services
     {
         public FileNode BuildTree(List<Movie> movies, string basePath)
         {
+            var hasDestinationRoot = !string.IsNullOrWhiteSpace(basePath);
             var root = new FileNode
             {
-                Name = basePath,
+                Name = hasDestinationRoot
+                    ? basePath
+                    : "Destination not configured",
                 IsFolder = true,
                 IsExpanded = true
             };
@@ -43,7 +46,7 @@ namespace PIM.Web.Services
                         !movie.IsDuplicate
                     );
 
-                if (!shouldKeep)
+                if (!shouldKeep || !hasDestinationRoot)
                     continue;
 
                 if (string.IsNullOrWhiteSpace(movie.TargetPath))
