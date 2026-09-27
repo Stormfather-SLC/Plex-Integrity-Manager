@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.Mvc.Rendering;
-using Microsoft.Extensions.Caching.Memory;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 
@@ -9,24 +8,21 @@ namespace PIM.Web.Pages;
 
 public class DestinationProfilesModel : PageModel
 {
-    private const string DryRunPreviewCacheKey = "DryRunPreview";
-    private const string DryRunApprovalCacheKey = "DryRunApproval";
-
     private readonly IDestinationProfileStore _profileStore;
     private readonly IDestinationPathBuilder _pathBuilder;
     private readonly IConfiguration _configuration;
-    private readonly IMemoryCache _cache;
+    private readonly IWorkflowStateStore _workflowState;
 
     public DestinationProfilesModel(
         IDestinationProfileStore profileStore,
         IDestinationPathBuilder pathBuilder,
         IConfiguration configuration,
-        IMemoryCache cache)
+        IWorkflowStateStore workflowState)
     {
         _profileStore = profileStore;
         _pathBuilder = pathBuilder;
         _configuration = configuration;
-        _cache = cache;
+        _workflowState = workflowState;
     }
 
     public IReadOnlyList<DestinationProfile> Profiles { get; private set; }
@@ -291,8 +287,7 @@ public class DestinationProfilesModel : PageModel
 
     private void InvalidateDryRunApproval()
     {
-        _cache.Remove(DryRunPreviewCacheKey);
-        _cache.Remove(DryRunApprovalCacheKey);
+        _workflowState.InvalidateDryRunApproval();
     }
 
     private static bool TryValidateProfile(
