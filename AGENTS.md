@@ -8,13 +8,13 @@ Preserve existing behavior unless the task explicitly changes it. Investigate th
 
 ## Stack and repository map
 
-- `Plex Integrity Manager (PIM).sln`: application solution. It currently contains the web, Core, Application, and Infrastructure projects, but not `PIM.Tests`; run the test project explicitly.
+- `Plex Integrity Manager (PIM).sln`: application solution containing the web, Core, Application, Infrastructure, and `PIM.Tests` projects.
 - `Plex Intake Manager (PIM)/`: `PIM.Web`, a .NET 8 ASP.NET Core Razor Pages app. `Program.cs` is the composition root; `Pages/Index.*` owns the scan/identify/dry-run/commit workflow; `Pages/DestinationProfiles.*` manages destination profiles; `Services/` contains preview-tree, dry-run-preview, and JSON profile-storage services.
 - `PIM.Core/`: domain models and service interfaces. `Models/Movies.cs` contains movie identity, review, conflict, approval, and Plex naming state. `Models/DestinationProfiles.cs` contains configurable organization levels and path results.
 - `PIM.Infrastructure/`: filesystem scanning, filename parsing, OMDb metadata, destination building/conflict checks, Plex library validation, duplicate decisions, and live rename/move execution.
 - `PIM.Application/`: currently a thin placeholder project; do not assume application orchestration lives here.
 - `PIM.Tests/`: xUnit tests for path building, parsing, OMDb responses, Plex/destination conflicts, and rename/source-cleanup safety. HTTP tests use stubs and file-operation tests use isolated temporary directories.
-- `.github/workflows/build.yml`: Windows CI for the web project plus the explicit test project.
+- `.github/workflows/build.yml`: Windows CI that builds the solution and runs `PIM.Tests` on pull requests and on pushes to `main`, `feature/**`, `feat/**`, `fix/**`, `chore/**`, and `integration/**`.
 - `Start-PIM.ps1`: owner convenience script that runs `git pull`, builds, and starts PIM. Codex must not run it without explicit approval because it changes repository state through `git pull`.
 
 ## Current architecture and behavior
@@ -81,13 +81,20 @@ For release-equivalent verification, use `--configuration Release`. Do not use `
 ## Tests and completion criteria
 
 - Add or update focused tests for changed parsing, naming, approval, conflict, preview, and filesystem behavior. High-risk move/cleanup behavior needs both dry-run and live-operation tests against temporary directories.
-- Run the explicit test project because it is not included in the solution. Before declaring a code task complete, restore when dependencies changed, build the solution, run relevant tests (normally the full `PIM.Tests` suite), and inspect `git diff` plus `git status`.
+- Before declaring a code task complete, restore when dependencies changed, build the solution, run relevant tests (normally the full `PIM.Tests` suite), and inspect `git diff` plus `git status`.
 - Treat build errors, test failures, analyzer warnings, restore warnings, and unobserved exceptions as findings to investigate. Do not suppress warnings or broadly catch exceptions merely to make verification pass; explain existing issues separately from changes introduced by the task.
 - After each task, summarize every changed file, behavior affected, commands run, results, remaining warnings/errors, and any manual verification the owner should perform.
 
 ## Git expectations
 
-Preserve all existing work. Do not discard, overwrite, reset, clean, stash, rebase, merge, commit, push, force-push, or change branches unless the owner explicitly requests that exact Git action. Keep diffs focused and do not edit generated `bin/`, `obj/`, `.vs/`, test-results, logs, or local settings. Never run commands that implicitly pull or publish changes without approval.
+The owner has delegated Phase One (MVP) development to Claude with full autonomy (2026-09-27):
+
+- Claude may create branches, commit, push, open pull requests, and merge into `main` once the Windows CI build and full test suite pass.
+- Work on a short-lived branch per focused change (`feat/`, `fix/`, `chore/`) and merge through a pull request so every change has a reviewable record. Never force-push `main` or rewrite published history.
+- Safety-critical changes (path generation, rename/move, source cleanup, dry-run/commit approval, fingerprinting) are allowed but must: include regression tests proving the fix and proving dry run still performs no file operation; be labelled **Safety-critical** in the pull request description with a plain-language explanation of the behavior change.
+- The safety rules in "Media, filesystem, and Plex safety" and "Configuration and credentials" are unchanged and still apply in full.
+
+Preserve all existing work. Do not discard, reset, clean, or stash uncommitted work that Claude did not create. Keep diffs focused and do not edit generated `bin/`, `obj/`, `.vs/`, test-results, logs, or local settings. `Start-PIM.ps1` still must not be run by an agent because it runs `git pull` on the owner's machine.
 
 ## PIM Product Direction and Roadmap
 

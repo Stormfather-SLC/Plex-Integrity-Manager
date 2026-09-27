@@ -11,6 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\PIM.Application\PIM.Application.csproj" />
     <ProjectReference Include="..\PIM.Core\PIM.Core.csproj" />
+    <ProjectReference Include="..\PIM.Infrastructure\PIM.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>
