@@ -152,7 +152,9 @@ namespace PIM.Infrastructure.Parsing
             // =========================================================
             cleaned = Regex.Replace(
                 cleaned,
-                @"\b(1080p|720p|480p|2160p|4k|BluRay|WEBRip|WEB-DL|HDRip|DVDRip|x264|x265|AAC|YTS|RARBG|UHD|HD)\b",
+                // Only tags that cannot plausibly be title words ("WEB" is
+                // deliberately absent: Charlotte's Web).
+                @"\b(1080p|1080i|720p|480p|2160p|4k|BluRay|BRRip|BDRip|WEBRip|WEB-DL|HDRip|DVDRip|HDTV|REMUX|x264|x265|H\.?264|H\.?265|HEVC|XviD|DivX|10bit|AAC|AC3|DTS|TrueHD|Atmos|PROPER|REPACK|AMZN|YTS|RARBG|UHD|HD)\b",
                 "",
                 RegexOptions.IgnoreCase);
 

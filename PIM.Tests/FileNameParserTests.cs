@@ -48,6 +48,13 @@ public sealed class FileNameParserTests
     [InlineData("Inception.2010.1080p.mkv", "Inception", 2010)]
     [InlineData("Interstellar.2014.720p.mkv", "Interstellar", 2014)]
     [InlineData("The.Dark.Knight.2008.mkv", "The Dark Knight", 2008)]
+    [InlineData("Btter.Of.Ded.1985.XviD.avi", "Btter Of Ded", 1985)]
+    [InlineData("Heat.1995.DivX.avi", "Heat", 1995)]
+    [InlineData("Dune.2021.2160p.WEB-DL.H.265.HEVC.10bit.DTS-HD.Atmos.mkv", "Dune", 2021)]
+    [InlineData("Alien.1979.REMUX.1080p.BluRay.TrueHD.AC3.mkv", "Alien", 1979)]
+    [InlineData("Up.2009.PROPER.REPACK.BRRip.BDRip.x264.mkv", "Up", 2009)]
+    [InlineData("Arrival.2016.AMZN.HDTV.H264.1080i.mkv", "Arrival", 2016)]
+    [InlineData("Charlottes.Web.2006.mkv", "Charlottes Web", 2006)]
     public void Parse_BasicTitleYearFiles_ProducesOmdbLookupInput(
         string fileName,
         string expectedTitle,
