@@ -16,20 +16,26 @@ namespace PIM.Infrastructure.Services
         private readonly IConfiguration _configuration;
         private readonly ScanProgress _progress;
         private readonly SourceCleanupStatus _sourceCleanupStatus;
+        private readonly IOperationJournal _journal;
 
         public RenameService(
             IDestinationConflictService destinationConflictService,
             IDestinationPathBuilder destinationPathBuilder,
             IConfiguration configuration,
             ScanProgress progress,
-            SourceCleanupStatus sourceCleanupStatus)
+            SourceCleanupStatus sourceCleanupStatus,
+            IOperationJournal? journal = null)
         {
+            _journal = journal ?? NullOperationJournal.Instance;
             _destinationConflictService = destinationConflictService;
             _destinationPathBuilder = destinationPathBuilder;
             _configuration = configuration;
             _progress = progress;
             _sourceCleanupStatus = sourceCleanupStatus;
         }
+
+        /// <summary>Journal file for the most recent dry run or live commit.</summary>
+        public string? LastJournalLocation { get; private set; }
 
         public void GeneratePreview(
             List<Movie> movies,
@@ -148,10 +154,78 @@ namespace PIM.Infrastructure.Services
                 $"[PIM] {operationName} started for {movies.Count:N0} approved file(s). " +
                 $"Destination: {normalizedDestinationRoot}");
 
+            // Fail closed: a live commit never moves a file it could not record.
+            IOperationJournalRun journalRun;
+
+            try
+            {
+                journalRun = _journal.StartRun(
+                    dryRun,
+                    normalizedDestinationRoot,
+                    movies.Count);
+                LastJournalLocation = journalRun.Location;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[PIM] Operation journal could not be started: {ex.Message}");
+
+                if (!dryRun)
+                {
+                    foreach (var movie in movies)
+                    {
+                        movie.ApprovedForCommit = false;
+                        movie.ErrorMessage =
+                            $"No files were moved: the operation journal could not be written ({ex.Message}).";
+                        movie.Status = "Not moved - journal unavailable";
+                    }
+
+                    _progress.Message = "Live commit aborted: the operation journal could not be written.";
+                    _progress.IsRunning = false;
+                    return;
+                }
+
+                journalRun = NullOperationJournal.Instance.StartRun(
+                    dryRun,
+                    normalizedDestinationRoot,
+                    movies.Count);
+            }
+
+            var journalFailed = false;
+
+            // Informational entries (skips, conflicts) must never change the
+            // outcome for a movie; the pre-move entry is the one that gates moves.
+            void RecordBestEffort(OperationJournalEntry entry)
+            {
+                try
+                {
+                    journalRun.Record(entry);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[PIM] Operation journal write failed: {ex.Message}");
+                }
+            }
+
+            using var journalScope = journalRun;
+
             try
             {
                 foreach (var movie in movies)
                 {
+                    if (journalFailed)
+                    {
+                        if (movie.ApprovedForCommit)
+                        {
+                            movie.ApprovedForCommit = false;
+                            movie.Status = "Not moved - journal write failed earlier in this run";
+                        }
+
+                        _progress.Processed++;
+                        continue;
+                    }
+
                     var displayName = movie.FileName ??
                                       Path.GetFileName(movie.OriginalFilePath) ??
                                       movie.Title ??
@@ -190,6 +264,9 @@ namespace PIM.Infrastructure.Services
 
                             Console.WriteLine(
                                 $"[PIM] Skipped: {displayName} - {movie.Status}");
+                            RecordBestEffort(OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.Skipped,
+                                movie));
                             continue;
                         }
 
@@ -199,6 +276,9 @@ namespace PIM.Infrastructure.Services
                             movie.ApprovedForCommit = false;
                             Console.WriteLine(
                                 $"[PIM] Skipped: {displayName} - missing target path.");
+                            RecordBestEffort(OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.Skipped,
+                                movie));
                             continue;
                         }
 
@@ -218,6 +298,10 @@ namespace PIM.Infrastructure.Services
                                     movie.TargetPath));
                             Console.WriteLine(
                                 $"[PIM] Skipped: {displayName} - source and target are the same file.");
+                            RecordBestEffort(OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.Conflict,
+                                movie,
+                                movie.DestinationConflictReason));
                             continue;
                         }
 
@@ -226,6 +310,9 @@ namespace PIM.Infrastructure.Services
                             movie.Status = "Dry Run Complete";
                             Console.WriteLine(
                                 $"[PIM] Would move: {movie.OriginalFilePath} -> {movie.TargetPath}");
+                            RecordBestEffort(OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.WouldMove,
+                                movie));
                             continue;
                         }
 
@@ -235,6 +322,9 @@ namespace PIM.Infrastructure.Services
                             movie.ApprovedForCommit = false;
                             Console.WriteLine(
                                 $"[PIM] Skipped: source file missing - {movie.OriginalFilePath}");
+                            RecordBestEffort(OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.Skipped,
+                                movie));
                             continue;
                         }
 
@@ -251,6 +341,10 @@ namespace PIM.Infrastructure.Services
                             MarkRuntimeDestinationConflict(movie, destinationResult);
                             Console.WriteLine(
                                 $"[PIM] Conflict: {displayName} - {destinationResult.Message}");
+                            RecordBestEffort(OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.Conflict,
+                                movie,
+                                destinationResult.Message));
                             continue;
                         }
 
@@ -269,6 +363,10 @@ namespace PIM.Infrastructure.Services
                                     movie.TargetPath));
                             Console.WriteLine(
                                 $"[PIM] Conflict: target appeared before move - {movie.TargetPath}");
+                            RecordBestEffort(OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.Conflict,
+                                movie,
+                                "The exact target file appeared before the move could be completed."));
                             continue;
                         }
 
@@ -277,6 +375,24 @@ namespace PIM.Infrastructure.Services
 
                         var originalDirectory = Path.GetDirectoryName(
                             movie.OriginalFilePath);
+
+                        // Gate: the intended move must be durably recorded
+                        // before the file is touched.
+                        try
+                        {
+                            journalRun.Record(OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.MoveStarting,
+                                movie));
+                        }
+                        catch (Exception journalEx)
+                        {
+                            journalFailed = true;
+                            movie.ApprovedForCommit = false;
+                            movie.Status = "Not moved - journal write failed";
+                            Console.WriteLine(
+                                $"[PIM] Not moved: {displayName} - operation journal write failed: {journalEx.Message}");
+                            continue;
+                        }
 
                         File.Move(
                             movie.OriginalFilePath,
@@ -290,6 +406,22 @@ namespace PIM.Infrastructure.Services
                         movie.Status = "Committed";
 
                         Console.WriteLine($"[PIM] Committed: {movie.TargetPath}");
+
+                        try
+                        {
+                            journalRun.Record(OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.Moved,
+                                movie));
+                        }
+                        catch (Exception journalEx)
+                        {
+                            // The move itself succeeded and MoveStarting is on
+                            // disk; stop further moves because later ones
+                            // could not be recorded.
+                            journalFailed = true;
+                            Console.WriteLine(
+                                $"[PIM] Operation journal write failed after moving {displayName}; remaining moves stopped: {journalEx.Message}");
+                        }
                     }
                     catch (IOException ex)
                     {
@@ -312,6 +444,10 @@ namespace PIM.Infrastructure.Services
 
                         Console.WriteLine(
                             $"[PIM] File operation error for {displayName}: {ex.Message}");
+                        RecordBestEffort(OperationJournalEntry.ForMovie(
+                            OperationJournalEvent.Failed,
+                            movie,
+                            ex.Message));
                     }
                     catch (Exception ex)
                     {
@@ -321,6 +457,10 @@ namespace PIM.Infrastructure.Services
 
                         Console.WriteLine(
                             $"[PIM] Error processing {displayName}: {ex.Message}");
+                        RecordBestEffort(OperationJournalEntry.ForMovie(
+                            OperationJournalEvent.Failed,
+                            movie,
+                            ex.Message));
                     }
                     finally
                     {
@@ -335,7 +475,10 @@ namespace PIM.Infrastructure.Services
 
                     var cleanupResult = RemoveEmptyCommittedSourceFolders(
                         _configuration["PIM:ScanPath"] ?? string.Empty,
-                        committedSourceDirectories);
+                        committedSourceDirectories,
+                        removedFolder => RecordBestEffort(new OperationJournalEntry(
+                            OperationJournalEvent.SourceFolderRemoved,
+                            SourcePath: removedFolder)));
 
                     _sourceCleanupStatus.Complete(
                         cleanupResult.EmptyFoldersRemoved,
@@ -359,6 +502,13 @@ namespace PIM.Infrastructure.Services
                     : "Live commit complete.";
                 _progress.IsRunning = false;
 
+                RecordBestEffort(new OperationJournalEntry(
+                    journalFailed
+                        ? OperationJournalEvent.RunAborted
+                        : OperationJournalEvent.RunCompleted,
+                    Status: operationName,
+                    Detail: $"Committed {movies.Count(m => m.Status == "Committed")} file(s); processed {_progress.Processed} of {_progress.Total}."));
+
                 Console.WriteLine(
                     $"[PIM] {operationName} finished. " +
                     $"Processed {_progress.Processed:N0} of {_progress.Total:N0} file(s).");
@@ -367,7 +517,8 @@ namespace PIM.Infrastructure.Services
 
         private static SourceCleanupResult RemoveEmptyCommittedSourceFolders(
             string sourceRoot,
-            IEnumerable<string> committedSourceDirectories)
+            IEnumerable<string> committedSourceDirectories,
+            Action<string>? onFolderRemoved = null)
         {
             var removedCount = 0;
             var protectedCount = 0;
@@ -536,6 +687,7 @@ namespace PIM.Infrastructure.Services
 
                     Directory.Delete(directory, recursive: false);
                     removedCount++;
+                    onFolderRemoved?.Invoke(directory);
 
                     Console.WriteLine(
                         $"[PIM] Removed empty source folder: {directory}");

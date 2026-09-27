@@ -215,6 +215,8 @@ public sealed class IndexModelSafetyTests
     {
         public int ExecuteCount { get; private set; }
 
+        public string? LastJournalLocation => null;
+
         public void GeneratePreview(
             List<Movie> movies,
             DestinationProfile profile,

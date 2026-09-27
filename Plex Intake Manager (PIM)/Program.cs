@@ -43,6 +43,7 @@ builder.Services.AddScoped<IDestinationConflictService, DestinationConflictServi
 // receives HttpClient correctly and preserves its fail-closed diagnostics.
 builder.Services.AddHttpClient<IPlexLibraryConflictService, PlexLibraryConflictService>();
 builder.Services.AddScoped<IMovieConflictDetectionService, MovieConflictDetectionService>();
+builder.Services.AddSingleton<IOperationJournal, JsonLinesOperationJournal>();
 builder.Services.AddScoped<IRenameService, RenameService>();
 builder.Services.AddScoped<IMoviePlanService, MoviePlanService>();
 builder.Services.AddScoped<IMetadataSuggestionService, MetadataSuggestionService>();
