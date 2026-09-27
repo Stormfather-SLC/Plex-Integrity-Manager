@@ -59,8 +59,8 @@ namespace PIM.Infrastructure.Services
                 if (!_disabledLogged)
                 {
                     _logger.LogWarning(
-                        "Plex library conflict detection is disabled. Resolved Plex:Enabled value: {PlexEnabledValue}",
-                        _configuration["Plex:Enabled"] ?? "<null>");
+                        "Plex library conflict detection is explicitly disabled (Plex:Enabled = {PlexEnabledValue}). Moves will be approved without checking the Plex library.",
+                        _configuration[PlexSettings.EnabledKey] ?? "<null>");
                     _disabledLogged = true;
                 }
 
@@ -591,10 +591,8 @@ namespace PIM.Infrastructure.Services
 
         private bool IsEnabled()
         {
-            return bool.TryParse(
-                       _configuration["Plex:Enabled"],
-                       out var enabled) &&
-                   enabled;
+            return PlexSettings.IsLibraryCheckEnabled(
+                _configuration[PlexSettings.EnabledKey]);
         }
 
         private sealed record PlexLibraryEntry(

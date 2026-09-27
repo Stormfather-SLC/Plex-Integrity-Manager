@@ -29,6 +29,15 @@
     </div>
 }
 
+@if (Model.PlexCheckDisabled)
+{
+    <div class="alert alert-warning mt-3" id="plexCheckDisabledAlert">
+        <strong>Plex library check is turned off</strong> (<code>Plex:Enabled</code> is set to <code>false</code>).
+        PIM is not checking whether a movie is already in your Plex library, so it can approve moves that duplicate movies Plex already has.
+        Remove the setting or set it to <code>true</code> to turn the check back on.
+    </div>
+}
+
 @if (TempData["Message"] != null)
 {
     <div class="alert alert-info mt-3">
