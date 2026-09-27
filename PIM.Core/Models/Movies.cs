@@ -81,6 +81,37 @@ namespace PIM.Core.Models
             ReviewReason = string.Join(" | ", existingReasons);
         }
 
+        public const string DuplicateTieReviewPrefix = "No clear best file for ";
+
+        /// <summary>
+        /// True when duplicate analysis could not pick a preferred copy for
+        /// this movie's edition and a human must choose one.
+        /// </summary>
+        public bool HasDuplicateTieReview =>
+            SplitReviewReasons(ReviewReason).Any(IsDuplicateTieReason);
+
+        /// <summary>
+        /// Removes the duplicate-tie review reason after a human has chosen the
+        /// preferred copy. Every other review reason is kept.
+        /// </summary>
+        public void ClearDuplicateTieReview()
+        {
+            var reasons = SplitReviewReasons(ReviewReason);
+
+            if (reasons.RemoveAll(IsDuplicateTieReason) == 0)
+                return;
+
+            ReviewReason = reasons.Count == 0
+                ? null
+                : string.Join(" | ", reasons);
+            NeedsReview = reasons.Count > 0;
+        }
+
+        private static bool IsDuplicateTieReason(string reason) =>
+            reason.StartsWith(
+                DuplicateTieReviewPrefix,
+                StringComparison.OrdinalIgnoreCase);
+
         public void SetMetadataReview(
             string reason,
             MetadataLookupFailureType failureType,
@@ -194,6 +225,11 @@ namespace PIM.Core.Models
 
         public string? VersionTag { get; set; }
 
+        /// <summary>
+        /// Set when a human chose this file as the preferred copy of a tied
+        /// duplicate group. Duplicate analysis then keeps it instead of asking
+        /// again; every other plan check still applies.
+        /// </summary>
         public bool IsManuallyKept { get; set; }
 
         // =========================================================

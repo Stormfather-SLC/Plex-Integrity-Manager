@@ -37,6 +37,7 @@ public static class PlanFingerprintBuilder
                 movie.ErrorMessage ?? string.Empty,
                 movie.IsDuplicate,
                 movie.KeepRecommended,
+                movie.IsManuallyKept,
                 movie.HasDestinationConflict,
                 movie.DestinationConflictReason ?? string.Empty,
                 movie.ExistingDestinationPath ?? string.Empty,
