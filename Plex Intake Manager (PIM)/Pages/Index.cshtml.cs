@@ -28,6 +28,7 @@ namespace PIM.Web.Pages
         private readonly IMoviePlanService _moviePlan;
         private readonly ILogger<IndexModel> _logger;
         private readonly IMetadataSuggestionService _metadataSuggestion;
+        private readonly IDuplicateService _duplicates;
 
         [BindProperty(SupportsGet = true)]
         public bool ShowOnlyRecommended { get; set; }
@@ -86,6 +87,7 @@ namespace PIM.Web.Pages
             IDestinationProfileStore profileStore,
             IMoviePlanService moviePlan,
             IMetadataSuggestionService metadataSuggestion,
+            IDuplicateService duplicates,
             ILogger<IndexModel> logger)
         {
             _scanner = scanner;
@@ -100,6 +102,7 @@ namespace PIM.Web.Pages
             _profileStore = profileStore;
             _moviePlan = moviePlan;
             _metadataSuggestion = metadataSuggestion;
+            _duplicates = duplicates;
             _logger = logger;
         }
 
@@ -324,6 +327,52 @@ namespace PIM.Web.Pages
             TempData["Message"] = movie.NeedsReview || movie.HasError
                 ? $"Suggested match applied for '{movie.FileName}', but the item remains blocked: {movie.ReviewReason ?? movie.ErrorMessage ?? movie.Status}."
                 : $"Suggested match applied for '{movie.FileName}'. The downstream plan was rebuilt; run a new dry run before live commit.";
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
+        }
+
+        public IActionResult OnPostKeepDuplicateCopy(Guid movieId)
+        {
+            InvalidateDryRunApproval();
+
+            if (!TryGetCachedMovies(out var movies))
+            {
+                TempData["Message"] = "The scan is no longer available. Scan the source folder again.";
+                return RedirectToPage();
+            }
+
+            var movie = movies.SingleOrDefault(candidate => candidate.Id == movieId);
+
+            if (movie == null || !_duplicates.ChoosePreferredCopy(movie, movies))
+            {
+                TempData["Message"] =
+                    "That file is no longer part of an unresolved duplicate choice. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            _logger.LogInformation(
+                "User chose {FileName} as the preferred copy of {Title} ({Year}), IMDb {ImdbId}; invalidating prior dry-run approval and rebuilding the plan.",
+                movie.FileName ?? "<unknown>",
+                movie.Title,
+                movie.Year,
+                movie.ImdbId);
+
+            _moviePlan.Rebuild(
+                movies,
+                _profileStore.GetActiveProfile(),
+                _config["PIM:ScanPath"] ?? string.Empty,
+                GetConfiguredLibraryGoal());
+            SetCachedMovies(movies);
+
+            TempData["Message"] = movie.NeedsReview || movie.HasError
+                ? $"'{movie.FileName}' was chosen as the copy to keep, but it remains blocked: {movie.ReviewReason ?? movie.ErrorMessage ?? movie.Status}."
+                : $"'{movie.FileName}' was chosen as the copy to keep. The other copies will be skipped, not deleted. Run a new dry run before live commit.";
 
             return RedirectToPage(new
             {

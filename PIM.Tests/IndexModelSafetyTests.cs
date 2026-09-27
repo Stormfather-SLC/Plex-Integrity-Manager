@@ -369,6 +369,146 @@ public sealed class IndexModelSafetyTests
             StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task KeepDuplicateCopy_InvalidatesAnEarlierDryRunApproval()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var first = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        var second = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        second.FileName = "Handler.Movie.2024.Copy.mkv";
+        foreach (var movie in new[] { first, second })
+        {
+            movie.ApprovedForCommit = false;
+            movie.RequireReview("No clear best file for Standard Version");
+        }
+        store.SaveMovies(new List<Movie> { first, second }, workspace.SourceRoot);
+        var dryRun = CreateModel(store, configuration, profile);
+        dryRun.DryRun = true;
+        await dryRun.OnPostCommitAsync();
+        Assert.NotNull(store.GetDryRunApproval());
+
+        var choose = CreateModel(store, configuration, profile);
+        choose.OnPostKeepDuplicateCopy(first.Id);
+
+        Assert.Null(store.GetDryRunApproval());
+        Assert.True(first.IsManuallyKept);
+        Assert.False(second.IsManuallyKept);
+        var rename = new RecordingRenameService();
+        var live = CreateModel(store, configuration, profile, rename: rename);
+        live.DryRun = false;
+        await live.OnPostCommitAsync();
+        Assert.Equal(0, rename.ExecuteCount);
+    }
+
+    [Fact]
+    public void KeepDuplicateCopy_ForAMovieWithoutATie_ChangesNothing()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var plan = new RecordingPlanService();
+        var model = CreateModel(store, configuration, profile, plan: plan);
+
+        model.OnPostKeepDuplicateCopy(movie.Id);
+
+        Assert.False(movie.IsManuallyKept);
+        Assert.Equal(0, plan.CallCount);
+        Assert.Contains("Nothing was changed", model.TempData["Message"]?.ToString());
+    }
+
+    [Fact]
+    public async Task RealFiles_TiedDuplicates_OnlyTheChosenCopyMovesAndTheOtherIsUntouched()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Duplicate-Files");
+        Directory.CreateDirectory(workspace.DestinationRoot);
+        var keepFile = Path.Combine(workspace.SourceRoot, "Copy A", "Tied.Movie.2020.mkv");
+        var skipFile = Path.Combine(workspace.SourceRoot, "Copy B", "Tied.Movie.2020.mkv");
+        foreach (var file in new[] { keepFile, skipFile })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, "movie");
+        }
+
+        var configuration = CreateConfiguration(
+            workspace,
+            LibraryGoal.OrganizeNewMovies,
+            removeEmptySourceFolders: false);
+        var profile = new DestinationProfile
+        {
+            Name = "Duplicate Profile",
+            DestinationRoot = workspace.DestinationRoot
+        };
+        var keep = CreateIdentifiedFileMovie(keepFile);
+        var skip = CreateIdentifiedFileMovie(skipFile);
+        var store = CreateStore(configuration);
+        store.SaveMovies(new List<Movie> { keep, skip }, workspace.SourceRoot);
+
+        async Task<IndexModel> CommitAsync(bool dryRun)
+        {
+            var (rename, plan) = CreateRealServices(configuration);
+            var model = CreateModel(store, configuration, profile, rename: rename, plan: plan);
+            model.DryRun = dryRun;
+            await model.OnPostCommitAsync();
+            return model;
+        }
+
+        await CommitAsync(dryRun: true);
+        Assert.True(keep.HasDuplicateTieReview);
+        Assert.True(skip.HasDuplicateTieReview);
+        Assert.False(keep.ApprovedForCommit);
+        Assert.False(skip.ApprovedForCommit);
+
+        var (chooseRename, choosePlan) = CreateRealServices(configuration);
+        CreateModel(store, configuration, profile, rename: chooseRename, plan: choosePlan)
+            .OnPostKeepDuplicateCopy(keep.Id);
+
+        var dryRunAfterChoice = await CommitAsync(dryRun: true);
+        Assert.StartsWith("Dry Run Complete", dryRunAfterChoice.TempData["Message"]?.ToString());
+        Assert.True(keep.ApprovedForCommit);
+        Assert.False(keep.NeedsReview);
+        Assert.False(skip.ApprovedForCommit);
+        Assert.False(skip.NeedsReview);
+        Assert.True(File.Exists(keepFile));
+        Assert.True(File.Exists(skipFile));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.DestinationRoot));
+        var target = keep.TargetPath!;
+
+        var live = await CommitAsync(dryRun: false);
+
+        Assert.StartsWith("Changes Applied", live.TempData["Message"]?.ToString());
+        Assert.False(File.Exists(keepFile));
+        Assert.True(File.Exists(target));
+        Assert.True(File.Exists(skipFile));
+        Assert.Single(Directory.EnumerateFiles(
+            workspace.DestinationRoot,
+            "*",
+            SearchOption.AllDirectories));
+    }
+
+    private static Movie CreateIdentifiedFileMovie(string file)
+    {
+        return new Movie
+        {
+            Title = "Tied Movie",
+            Year = 2020,
+            ImdbId = "tt2020202",
+            OriginalFilePath = file,
+            FileName = Path.GetFileName(file),
+            DirectoryPath = Path.GetDirectoryName(file),
+            FileSizeBytes = new FileInfo(file).Length,
+            MetadataFetched = true,
+            MetadataMatchedByImdbId = true,
+            MatchConfidence = 100,
+            Status = "IMDb ID Match"
+        };
+    }
+
     private static (IRenameService Rename, IMoviePlanService Plan) CreateRealServices(
         IConfiguration configuration)
     {
@@ -442,6 +582,7 @@ public sealed class IndexModelSafetyTests
             new FixedProfileStore(profile),
             plan,
             new NoOpSuggestionService(),
+            new DuplicateService(),
             NullLogger<IndexModel>.Instance);
         var httpContext = new DefaultHttpContext();
         model.PageContext = new PageContext

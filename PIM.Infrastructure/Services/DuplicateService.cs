@@ -57,6 +57,44 @@ namespace PIM.Infrastructure.Services
             AutoApproveCleanUniqueMovies(movies);
         }
 
+        public bool ChoosePreferredCopy(Movie chosen, List<Movie> movies)
+        {
+            ArgumentNullException.ThrowIfNull(chosen);
+            ArgumentNullException.ThrowIfNull(movies);
+
+            if (!chosen.HasDuplicateTieReview ||
+                string.IsNullOrWhiteSpace(chosen.ImdbId) ||
+                !movies.Contains(chosen))
+            {
+                return false;
+            }
+
+            var versionKey = GetVersionKey(chosen);
+            var tiedGroup = movies
+                .Where(movie =>
+                    string.Equals(
+                        movie.ImdbId?.Trim(),
+                        chosen.ImdbId.Trim(),
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(
+                        GetVersionKey(movie),
+                        versionKey,
+                        StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (tiedGroup.Count < 2)
+                return false;
+
+            foreach (var movie in tiedGroup)
+            {
+                movie.IsManuallyKept = ReferenceEquals(movie, chosen);
+                movie.ApprovedForCommit = false;
+                movie.ClearDuplicateTieReview();
+            }
+
+            return true;
+        }
+
         // =====================================================
         // 🔄 RESET
         // =====================================================
@@ -157,11 +195,25 @@ namespace PIM.Infrastructure.Services
                 .ThenBy(m => m.FileName)
                 .ToList();
 
+            // A human choice settles a tie. More than one choice in the same
+            // edition is contradictory, so it falls back to review.
+            var manuallyKept = ordered
+                .Where(movie => movie.IsManuallyKept)
+                .ToList();
+
+            if (manuallyKept.Count == 1)
+            {
+                ordered.Remove(manuallyKept[0]);
+                ordered.Insert(0, manuallyKept[0]);
+            }
+
             var bestForThisVersion = ordered.First();
 
             bool hasClearWinner =
                 ordered.Count == 1 ||
-                ordered[0].FileSizeBytes - ordered[1].FileSizeBytes > SizeToleranceBytes;
+                manuallyKept.Count == 1 ||
+                (manuallyKept.Count == 0 &&
+                 ordered[0].FileSizeBytes - ordered[1].FileSizeBytes > SizeToleranceBytes);
 
             if (!hasClearWinner)
             {
@@ -169,7 +221,7 @@ namespace PIM.Infrastructure.Services
 
                 foreach (var movie in ordered)
                 {
-                    movie.RequireReview($"No clear best file for {versionLabel}");
+                    movie.RequireReview($"{Movie.DuplicateTieReviewPrefix}{versionLabel}");
                     movie.KeepRecommended = false;
                     movie.IsAlternateVersion = false;
                 }
