@@ -38,6 +38,7 @@ public static class PlanFingerprintBuilder
                 movie.IsDuplicate,
                 movie.KeepRecommended,
                 movie.IsManuallyKept,
+                movie.FileNameConfirmed,
                 movie.HasDestinationConflict,
                 movie.DestinationConflictReason ?? string.Empty,
                 movie.ExistingDestinationPath ?? string.Empty,

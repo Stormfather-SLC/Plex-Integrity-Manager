@@ -618,6 +618,110 @@ public sealed class IndexModelSafetyTests
         Assert.Equal("tt1234567", movie.ImdbId);
     }
 
+    [Fact]
+    public async Task ConfirmFileName_InvalidatesAnEarlierDryRunApproval()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        movie.ApprovedForCommit = false;
+        movie.RequireReview("Suspicious file name");
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var dryRun = CreateModel(store, configuration, profile);
+        dryRun.DryRun = true;
+        await dryRun.OnPostCommitAsync();
+        Assert.NotNull(store.GetDryRunApproval());
+
+        CreateModel(store, configuration, profile).OnPostConfirmFileName(movie.Id);
+
+        Assert.True(movie.FileNameConfirmed);
+        Assert.Null(store.GetDryRunApproval());
+        var rename = new RecordingRenameService();
+        var live = CreateModel(store, configuration, profile, rename: rename);
+        live.DryRun = false;
+        await live.OnPostCommitAsync();
+        Assert.Equal(0, rename.ExecuteCount);
+    }
+
+    [Fact]
+    public void ConfirmFileName_ForAMovieWithoutThatReview_ChangesNothing()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var plan = new RecordingPlanService();
+        var model = CreateModel(store, configuration, profile, plan: plan);
+
+        model.OnPostConfirmFileName(movie.Id);
+
+        Assert.False(movie.FileNameConfirmed);
+        Assert.Equal(0, plan.CallCount);
+        Assert.Contains("Nothing was changed", model.TempData["Message"]?.ToString());
+    }
+
+    [Fact]
+    public async Task RealFiles_LongFileName_MovesOnlyAfterConfirmationAndANewDryRun()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-LongName");
+        Directory.CreateDirectory(workspace.DestinationRoot);
+        var sourceFile = Path.Combine(
+            workspace.SourceRoot,
+            "Long.Movie.2020." + new string('x', 110) + ".mkv");
+        Directory.CreateDirectory(workspace.SourceRoot);
+        File.WriteAllText(sourceFile, "movie");
+        var configuration = CreateConfiguration(
+            workspace,
+            LibraryGoal.OrganizeNewMovies,
+            removeEmptySourceFolders: false);
+        var profile = new DestinationProfile
+        {
+            Name = "Long Name Profile",
+            DestinationRoot = workspace.DestinationRoot
+        };
+        var movie = CreateIdentifiedFileMovie(sourceFile);
+        var store = CreateStore(configuration);
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+
+        async Task<IndexModel> CommitAsync(bool dryRun)
+        {
+            var (rename, plan) = CreateRealServices(configuration);
+            var model = CreateModel(store, configuration, profile, rename: rename, plan: plan);
+            model.DryRun = dryRun;
+            await model.OnPostCommitAsync();
+            return model;
+        }
+
+        await CommitAsync(dryRun: true);
+        Assert.True(movie.HasSuspiciousFileNameReview);
+        Assert.False(movie.ApprovedForCommit);
+
+        var (confirmRename, confirmPlan) = CreateRealServices(configuration);
+        CreateModel(store, configuration, profile, rename: confirmRename, plan: confirmPlan)
+            .OnPostConfirmFileName(movie.Id);
+
+        // Without a new dry run the live commit is still refused.
+        var refused = await CommitAsync(dryRun: false);
+        Assert.Contains("does not have a matching dry-run approval", refused.TempData["Message"]?.ToString());
+        Assert.True(File.Exists(sourceFile));
+
+        await CommitAsync(dryRun: true);
+        Assert.True(movie.ApprovedForCommit);
+        Assert.True(File.Exists(sourceFile));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.DestinationRoot));
+        var target = movie.TargetPath!;
+
+        var live = await CommitAsync(dryRun: false);
+
+        Assert.StartsWith("Changes Applied", live.TempData["Message"]?.ToString());
+        Assert.False(File.Exists(sourceFile));
+        Assert.True(File.Exists(target));
+    }
+
     private static Movie CreateIdentifiedFileMovie(string file)
     {
         return new Movie

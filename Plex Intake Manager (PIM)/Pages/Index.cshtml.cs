@@ -413,6 +413,52 @@ namespace PIM.Web.Pages
             });
         }
 
+        public IActionResult OnPostConfirmFileName(Guid movieId)
+        {
+            InvalidateDryRunApproval();
+
+            if (!TryGetCachedMovies(out var movies))
+            {
+                TempData["Message"] = "The scan is no longer available. Scan the source folder again.";
+                return RedirectToPage();
+            }
+
+            var movie = movies.SingleOrDefault(candidate => candidate.Id == movieId);
+
+            if (movie == null || !movie.HasSuspiciousFileNameReview)
+            {
+                TempData["Message"] =
+                    "That file no longer needs its name confirmed. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            _logger.LogInformation(
+                "User confirmed the unusually long file name of {FileName}; invalidating prior dry-run approval and rebuilding the plan.",
+                movie.FileName ?? "<unknown>");
+
+            movie.FileNameConfirmed = true;
+            movie.ApprovedForCommit = false;
+
+            _moviePlan.Rebuild(
+                movies,
+                _profileStore.GetActiveProfile(),
+                _config["PIM:ScanPath"] ?? string.Empty,
+                GetConfiguredLibraryGoal());
+            SetCachedMovies(movies);
+
+            TempData["Message"] = movie.NeedsReview || movie.HasError
+                ? $"The file name of '{movie.FileName}' was confirmed, but it remains blocked: {movie.ReviewReason ?? movie.ErrorMessage ?? movie.Status}."
+                : $"The file name of '{movie.FileName}' was confirmed. Run a new dry run before live commit.";
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
+        }
+
         public IActionResult OnPostKeepDuplicateCopy(Guid movieId)
         {
             InvalidateDryRunApproval();

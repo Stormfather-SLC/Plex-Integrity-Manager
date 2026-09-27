@@ -94,11 +94,47 @@ namespace PIM.Core.Models
         /// Removes the duplicate-tie review reason after a human has chosen the
         /// preferred copy. Every other review reason is kept.
         /// </summary>
-        public void ClearDuplicateTieReview()
+        public void ClearDuplicateTieReview() =>
+            RemoveReviewReasons(IsDuplicateTieReason);
+
+        private static bool IsDuplicateTieReason(string reason) =>
+            reason.StartsWith(
+                DuplicateTieReviewPrefix,
+                StringComparison.OrdinalIgnoreCase);
+
+        public const string SuspiciousFileNameReviewReason = "Suspicious file name";
+
+        /// <summary>
+        /// File names longer than this are sent to review because they often
+        /// belong to samples, bundles, or mislabeled files.
+        /// </summary>
+        public const int SuspiciousFileNameLength = 120;
+
+        public bool HasSuspiciousFileNameReview =>
+            SplitReviewReasons(ReviewReason).Any(IsSuspiciousFileNameReason);
+
+        /// <summary>
+        /// Set when a human checked an unusually long file name and confirmed
+        /// the file is the movie it appears to be. Every other check still applies.
+        /// </summary>
+        public bool FileNameConfirmed { get; set; }
+
+        /// <summary>
+        /// Removes only the suspicious-file-name review reason.
+        /// </summary>
+        public void ClearSuspiciousFileNameReview() =>
+            RemoveReviewReasons(IsSuspiciousFileNameReason);
+
+        private static bool IsSuspiciousFileNameReason(string reason) =>
+            reason.Equals(
+                SuspiciousFileNameReviewReason,
+                StringComparison.OrdinalIgnoreCase);
+
+        private void RemoveReviewReasons(Predicate<string> match)
         {
             var reasons = SplitReviewReasons(ReviewReason);
 
-            if (reasons.RemoveAll(IsDuplicateTieReason) == 0)
+            if (reasons.RemoveAll(match) == 0)
                 return;
 
             ReviewReason = reasons.Count == 0
@@ -106,11 +142,6 @@ namespace PIM.Core.Models
                 : string.Join(" | ", reasons);
             NeedsReview = reasons.Count > 0;
         }
-
-        private static bool IsDuplicateTieReason(string reason) =>
-            reason.StartsWith(
-                DuplicateTieReviewPrefix,
-                StringComparison.OrdinalIgnoreCase);
 
         public void SetMetadataReview(
             string reason,

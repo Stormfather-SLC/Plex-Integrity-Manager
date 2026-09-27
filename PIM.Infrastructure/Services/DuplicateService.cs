@@ -123,11 +123,13 @@ namespace PIM.Infrastructure.Services
                 // IsAlternateVersion is a decision flag, so it is recalculated below.
                 movie.IsAlternateVersion = false;
 
-                // The tie finding is owned by this service and fully recomputed
-                // below, so an outdated one (for example after a copy was
-                // re-identified as a different movie) must not linger. Review
+                // The tie and suspicious-name findings are owned by this service
+                // and fully recomputed below, so an outdated one (for example
+                // after a copy was re-identified as a different movie, or a
+                // human confirmed the file name) must not linger. Review
                 // reasons from every other stage stay sticky.
                 movie.ClearDuplicateTieReview();
+                movie.ClearSuspiciousFileNameReview();
 
             }
         }
@@ -281,9 +283,10 @@ namespace PIM.Infrastructure.Services
 
                 // Suspiciously long filename
                 if (!string.IsNullOrEmpty(movie.FileName) &&
-                    movie.FileName.Length > 120)
+                    movie.FileName.Length > Movie.SuspiciousFileNameLength &&
+                    !movie.FileNameConfirmed)
                 {
-                    movie.RequireReview("Suspicious file name");
+                    movie.RequireReview(Movie.SuspiciousFileNameReviewReason);
                 }
 
                 // OMDb confidence is represented on a 0-100 scale. IMDb-ID
