@@ -221,7 +221,8 @@ public sealed class RenameServiceSourceCleanupTests
                 fixture.DestinationRoot);
 
             Assert.False(File.Exists(movie.TargetPath!));
-            Assert.Equal("Source File Missing", movie.Status);
+            Assert.StartsWith("Source file is missing", movie.Status);
+            Assert.True(movie.NeedsReview);
             Assert.False(movie.ApprovedForCommit);
         }
         finally
@@ -342,6 +343,7 @@ public sealed class RenameServiceSourceCleanupTests
             Year = 1985,
             ImdbId = "tt0088794",
             OriginalFilePath = sourceFile,
+            FileSizeBytes = new FileInfo(sourceFile).Length,
             FileName = Path.GetFileName(sourceFile),
             TargetPath = targetPath,
             ApprovedForCommit = true,

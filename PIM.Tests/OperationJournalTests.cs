@@ -221,6 +221,62 @@ public sealed class OperationJournalTests : IDisposable
                      Directory.EnumerateFiles(JournalDirectory).Any());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SourceReplacedSinceScan_IsBlockedAndNeverMoved(bool dryRun)
+    {
+        var movie = CreateMovie("Better Off Dead", 1985, "tt0088794");
+        File.WriteAllText(movie.OriginalFilePath, "a different, larger file with the same name");
+        var service = CreateService(new JsonLinesOperationJournal(CreateConfiguration()));
+
+        service.ExecuteChanges(new List<Movie> { movie }, dryRun, DestinationRoot);
+
+        Assert.True(File.Exists(movie.OriginalFilePath));
+        Assert.False(File.Exists(movie.TargetPath!));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(movie.TargetPath!)));
+        Assert.False(movie.ApprovedForCommit);
+        Assert.True(movie.NeedsReview);
+        Assert.StartsWith("Source file changed since it was scanned", movie.ReviewReason);
+
+        var entries = ReadSingleJournal(dryRun ? "dry-run" : "live-commit");
+        var events = entries.Select(entry => entry.GetProperty("Event").GetString()).ToList();
+        Assert.DoesNotContain("WouldMove", events);
+        Assert.DoesNotContain("MoveStarting", events);
+        Assert.Contains(
+            entries,
+            entry => entry.GetProperty("Event").GetString() == "Skipped" &&
+                     entry.GetProperty("Detail").GetString()!.StartsWith("Source file changed"));
+    }
+
+    [Fact]
+    public void DryRun_MissingSource_IsReportedInsteadOfWouldMove()
+    {
+        var movie = CreateMovie("Better Off Dead", 1985, "tt0088794");
+        File.Delete(movie.OriginalFilePath);
+        var service = CreateService(new JsonLinesOperationJournal(CreateConfiguration()));
+
+        service.ExecuteChanges(new List<Movie> { movie }, dryRun: true, DestinationRoot);
+
+        Assert.True(movie.NeedsReview);
+        Assert.StartsWith("Source file is missing", movie.ReviewReason);
+        Assert.DoesNotContain(
+            ReadSingleJournal("dry-run"),
+            entry => entry.GetProperty("Event").GetString() == "WouldMove");
+    }
+
+    [Fact]
+    public void LiveCommit_WhenPreMoveEntryCannotBeWritten_CreatesNoDestinationFolder()
+    {
+        var movie = CreateMovie("Better Off Dead", 1985, "tt0088794");
+        var service = CreateService(new FailingJournal(failOnStart: false));
+
+        service.ExecuteChanges(new List<Movie> { movie }, dryRun: false, DestinationRoot);
+
+        Assert.True(File.Exists(movie.OriginalFilePath));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(movie.TargetPath!)));
+    }
+
     private List<JsonElement> ReadSingleJournal(string mode)
     {
         var file = Assert.Single(Directory.GetFiles(JournalDirectory));
@@ -267,6 +323,7 @@ public sealed class OperationJournalTests : IDisposable
             Year = year,
             ImdbId = imdbId,
             OriginalFilePath = sourceFile,
+            FileSizeBytes = new FileInfo(sourceFile).Length,
             FileName = Path.GetFileName(sourceFile),
             TargetPath = Path.Combine(DestinationRoot, folderName, $"{folderName}.mp4"),
             ApprovedForCommit = true,
