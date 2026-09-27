@@ -14,17 +14,40 @@ public sealed class LibraryGoalPlexPolicyTests
         @"G:\[PLEX]\Movies\Policy Movie\Policy Movie (2024) {imdb-tt1234567}.mkv";
 
     [Fact]
-    public void LibraryGoal_DefaultsToConsolidation()
+    public void LibraryGoal_DefaultsToOrganizeNewMovies_AndPreservesLegacyMappings()
     {
         Assert.Equal(
-            LibraryGoal.Consolidation,
+            LibraryGoal.OrganizeNewMovies,
             LibraryGoalSettings.Parse(null));
         Assert.Equal(
-            LibraryGoal.Consolidation,
+            LibraryGoal.OrganizeNewMovies,
             LibraryGoalSettings.Parse("unsupported-value"));
         Assert.Equal(
-            LibraryGoal.Consolidation,
+            LibraryGoal.OrganizeNewMovies,
             new DryRunPreviewResult().LibraryGoal);
+        Assert.Equal(
+            LibraryGoal.Consolidation,
+            LibraryGoalSettings.Parse("Consolidation"));
+        Assert.Equal(
+            LibraryGoal.ReorganizationMigration,
+            LibraryGoalSettings.Parse("ReorganizationMigration"));
+    }
+
+    [Fact]
+    public void OrganizeNewMovies_BlocksExistingSameImdbPlexMovie()
+    {
+        var movie = CreateMovie();
+        var detector = CreateDetector(PlexMatch(OutsidePlexPath));
+
+        detector.ApplyConflictDetection(
+            new List<Movie> { movie },
+            @"X:\PIM\Destination",
+            SourceRoot,
+            LibraryGoal.OrganizeNewMovies);
+
+        Assert.True(movie.HasPlexLibraryConflict);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
     }
 
     [Fact]
@@ -66,12 +89,12 @@ public sealed class LibraryGoalPlexPolicyTests
         Assert.True(movie.ApprovedForCommit);
         Assert.Equal(InsidePlexPath, movie.ExistingPlexLibraryPath);
         Assert.Contains(
-            "Plex-tracked migration",
+            "Plex awareness",
             movie.PlexTrackedMigrationReason);
     }
 
     [Fact]
-    public void Reorganization_BlocksPlexMatchOutsideSourceRoot()
+    public void Reorganization_AllowsPlexMatchOutsideSourceRootAsAwareness()
     {
         var movie = CreateMovie();
         var detector = CreateDetector(
@@ -83,12 +106,13 @@ public sealed class LibraryGoalPlexPolicyTests
             SourceRoot,
             LibraryGoal.ReorganizationMigration);
 
-        Assert.True(movie.HasPlexLibraryConflict);
-        Assert.False(movie.IsPlexTrackedMigration);
-        Assert.True(movie.NeedsReview);
+        Assert.False(movie.HasPlexLibraryConflict);
+        Assert.True(movie.IsPlexTrackedMigration);
+        Assert.False(movie.NeedsReview);
+        Assert.True(movie.ApprovedForCommit);
         Assert.Contains(
             "outside the selected source tree",
-            movie.PlexLibraryConflictReason);
+            movie.PlexTrackedMigrationReason);
         Assert.Equal(OutsidePlexPath, movie.ExistingPlexLibraryPath);
     }
 
@@ -333,7 +357,7 @@ public sealed class LibraryGoalPlexPolicyTests
     }
 
     [Fact]
-    public void Reorganization_IndeterminatePlexPathRemainsFailClosed()
+    public void Reorganization_IndeterminatePlexPathIsAwarenessOnlyForVerifiedIdentity()
     {
         var movie = CreateMovie();
         var detector = CreateDetector(
@@ -345,11 +369,13 @@ public sealed class LibraryGoalPlexPolicyTests
             SourceRoot,
             LibraryGoal.ReorganizationMigration);
 
-        Assert.True(movie.HasPlexLibraryConflict);
-        Assert.False(movie.IsPlexTrackedMigration);
+        Assert.False(movie.HasPlexLibraryConflict);
+        Assert.True(movie.IsPlexTrackedMigration);
+        Assert.False(movie.NeedsReview);
+        Assert.True(movie.ApprovedForCommit);
         Assert.Contains(
-            "could not safely determine",
-            movie.PlexLibraryConflictReason);
+            "could not be determined",
+            movie.PlexTrackedMigrationReason);
     }
 
     private static void Evaluate(

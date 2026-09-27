@@ -44,6 +44,8 @@ builder.Services.AddScoped<IDestinationConflictService, DestinationConflictServi
 builder.Services.AddHttpClient<IPlexLibraryConflictService, PlexLibraryConflictService>();
 builder.Services.AddScoped<IMovieConflictDetectionService, MovieConflictDetectionService>();
 builder.Services.AddScoped<IRenameService, RenameService>();
+builder.Services.AddScoped<IMoviePlanService, MoviePlanService>();
+builder.Services.AddScoped<IMetadataSuggestionService, MetadataSuggestionService>();
 
 builder.Services.AddSingleton<IDestinationProfileStore, DestinationProfileStore>();
 builder.Services.AddSingleton<ScanProgress>();

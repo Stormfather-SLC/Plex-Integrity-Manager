@@ -49,7 +49,7 @@ namespace PIM.Infrastructure.Services
             List<Movie> movies,
             string outputPath,
             string? sourceRoot = null,
-            LibraryGoal libraryGoal = LibraryGoal.Consolidation)
+            LibraryGoal libraryGoal = LibraryGoal.OrganizeNewMovies)
         {
             // Remember prior conflict rows before clearing their transient state.
             // This allows a commit-time recheck to evaluate the same files again.

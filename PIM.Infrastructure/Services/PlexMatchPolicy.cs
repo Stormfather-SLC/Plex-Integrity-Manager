@@ -41,25 +41,19 @@ public static class PlexMatchPolicy
             sourceRoot,
             plexResult.ExistingPath);
 
-        if (relationship == PlexPathRelationship.InsideSource)
+        var location = relationship switch
         {
-            return new PlexMatchPolicyDecision(
-                true,
-                $"Plex-tracked migration: Plex contains IMDb {movie.ImdbId} inside the selected source tree.",
-                relationship);
-        }
+            PlexPathRelationship.InsideSource => "inside the selected source tree",
+            PlexPathRelationship.OutsideSource => "outside the selected source tree",
+            _ => "at a path whose relationship to the source tree could not be determined"
+        };
 
-        if (relationship == PlexPathRelationship.OutsideSource)
-        {
-            return new PlexMatchPolicyDecision(
-                false,
-                $"Plex contains IMDb {movie.ImdbId} outside the selected source tree.",
-                relationship);
-        }
-
+        // In the migration workflow, a verified same-IMDb Plex entry is useful
+        // read-only awareness, not a conflict by itself. Destination collisions,
+        // ambiguous identity, duplicates, and every other safety check still apply.
         return new PlexMatchPolicyDecision(
-            false,
-            $"PIM could not safely determine whether the existing Plex path for IMDb {movie.ImdbId} is inside the selected source tree.",
+            true,
+            $"Plex awareness: Plex contains IMDb {movie.ImdbId} {location}. This does not block the selected migration workflow by itself.",
             relationship);
     }
 

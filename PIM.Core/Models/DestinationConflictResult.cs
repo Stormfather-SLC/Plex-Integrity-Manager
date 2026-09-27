@@ -4,6 +4,7 @@ namespace PIM.Core.Models
     {
         None,
         InvalidTargetPath,
+        SourceAndTargetAreSame,
         TargetFileAlreadyExists,
         TargetDirectoryBlockedByFile,
         SameImdbIdAndEditionExistsInDestination,

@@ -2,6 +2,7 @@ using System.Net;
 using Microsoft.Extensions.Configuration;
 using PIM.Core.Models;
 using PIM.Infrastructure.Metadata;
+using PIM.Infrastructure.Parsing;
 using Xunit;
 
 namespace PIM.Tests;
@@ -45,9 +46,8 @@ public sealed class OmdbMetadataServiceTests
     public async Task EnrichAsync_FailedTitleLookup_PreservesOmdbErrorWithoutApiKey()
     {
         const string apiKey = "secret-test-key";
-        var service = CreateService(
-            new StubHttpMessageHandler(new[]
-            {
+        var handler = new StubHttpMessageHandler(new[]
+        {
                 Response(HttpStatusCode.OK, """
                 {
                   "Response": "False",
@@ -65,9 +65,12 @@ public sealed class OmdbMetadataServiceTests
                   "Response": "False",
                   "Error": "Movie not found!"
                 }
-                """)
-            }),
-            apiKey);
+                """),
+                MovieNotFoundResponse(),
+                MovieNotFoundResponse(),
+            MovieNotFoundResponse()
+        });
+        var service = CreateService(handler, apiKey);
         var movie = new Movie { Title = "Not A Real Movie", Year = 2010 };
 
         await service.EnrichAsync(movie);
@@ -80,24 +83,16 @@ public sealed class OmdbMetadataServiceTests
             MetadataLookupFailureType.MovieNotFound,
             movie.MetadataLookupFailureType);
         Assert.DoesNotContain(apiKey, movie.MetadataLookupFailureDetail);
+        Assert.Equal(6, handler.RequestUris.Count);
     }
 
     [Fact]
-    public async Task EnrichAsync_TransposedTitleWithExactYear_AcceptsClearFuzzyWinner()
+    public async Task EnrichAsync_TransposedTitleWithExactYear_AcceptsClearSpellingWinner()
     {
         var handler = new StubHttpMessageHandler(new[]
         {
             MovieNotFoundResponse(),
-            Response(HttpStatusCode.OK, """
-            {
-              "Search": [
-                { "Title": "The Dark Knight", "Year": "2008", "imdbID": "tt0468569", "Type": "movie" },
-                { "Title": "Knight and Day", "Year": "2010", "imdbID": "tt1013743", "Type": "movie" }
-              ],
-              "totalResults": "2",
-              "Response": "True"
-            }
-            """),
+            MovieNotFoundResponse(),
             Response(HttpStatusCode.OK, """
             {
               "Title": "The Dark Knight",
@@ -107,7 +102,19 @@ public sealed class OmdbMetadataServiceTests
               "imdbID": "tt0468569",
               "Response": "True"
             }
-            """)
+            """),
+            MovieNotFoundResponse(),
+            Response(HttpStatusCode.OK, """
+            {
+              "Title": "The Dark Knight",
+              "Year": "2008",
+              "Rated": "PG-13",
+              "Genre": "Action, Crime, Drama",
+              "imdbID": "tt0468569",
+              "Response": "True"
+            }
+            """),
+            MovieNotFoundResponse()
         });
         var service = CreateService(handler);
         var movie = new Movie { Title = "The Drak Knight", Year = 2008 };
@@ -121,14 +128,250 @@ public sealed class OmdbMetadataServiceTests
         Assert.Equal(2008, movie.Year);
         Assert.Equal("tt0468569", movie.ImdbId);
         Assert.True(movie.MatchConfidence >= 85);
-        Assert.Equal(3, handler.RequestUris.Count);
+        Assert.Equal(6, handler.RequestUris.Count);
         Assert.Contains("?t=", handler.RequestUris[0].Query);
-        Assert.Contains("?s=", handler.RequestUris[1].Query);
-        Assert.Contains("?i=", handler.RequestUris[2].Query);
+        Assert.Contains("y=2008", handler.RequestUris[0].Query);
+        Assert.DoesNotContain("&y=", handler.RequestUris[1].Query);
+        Assert.Contains("t=The%20Dark%20Knight", handler.RequestUris[2].Query);
+        Assert.Contains("y=2008", handler.RequestUris[2].Query);
+        Assert.DoesNotContain("&y=", handler.RequestUris[4].Query);
     }
 
     [Fact]
-    public async Task EnrichAsync_MisspelledSingleWordWithExactYear_UsesBoundedBroaderSearch()
+    public async Task EnrichAsync_DictionaryWordTranspositionWithExactYear_AcceptsClearSpellingWinner()
+    {
+        var handler = new RoutingHttpMessageHandler(request =>
+        {
+            var query = request.RequestUri!.Query;
+
+            if (query.Contains("t=The%20Lion%20King", StringComparison.OrdinalIgnoreCase) &&
+                query.Contains("&y=1994", StringComparison.Ordinal))
+            {
+                return Response(HttpStatusCode.OK, """
+                {
+                  "Title": "The Lion King",
+                  "Year": "1994",
+                  "Rated": "G",
+                  "Genre": "Animation, Adventure, Drama",
+                  "imdbID": "tt0110357",
+                  "Response": "True"
+                }
+                """);
+            }
+
+            return MovieNotFoundResponse();
+        });
+        var service = CreateService(handler);
+        var movie = new Movie { Title = "The Loin King", Year = 1994 };
+
+        await service.EnrichAsync(movie);
+
+        Assert.True(movie.MetadataFetched);
+        Assert.False(movie.NeedsReview);
+        Assert.Equal("The Lion King", movie.Title);
+        Assert.Equal(1994, movie.Year);
+        Assert.Equal("tt0110357", movie.ImdbId);
+        Assert.Equal(MetadataMatchOrigin.SpellCorrectedTitleYear, movie.MetadataMatchOrigin);
+        Assert.Contains(handler.RequestUris, uri =>
+            uri.Query.Contains("t=The%20Lion%20King", StringComparison.OrdinalIgnoreCase) &&
+            uri.Query.Contains("&y=1994", StringComparison.Ordinal));
+        Assert.Contains(handler.RequestUris, uri =>
+            uri.Query.Contains("t=The%20Lion%20King", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Query.Contains("&y=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EnrichAsync_PluralTranspositionWithConflictingYear_ShowsSuggestionWithoutOverridingIdentity()
+    {
+        var handler = new RoutingHttpMessageHandler(request =>
+        {
+            var query = request.RequestUri!.Query;
+
+            if (query.Contains("t=The%20Incredibles", StringComparison.OrdinalIgnoreCase) &&
+                !query.Contains("&y=", StringComparison.Ordinal))
+            {
+                return Response(HttpStatusCode.OK, """
+                {
+                  "Title": "The Incredibles",
+                  "Year": "2004",
+                  "Rated": "PG",
+                  "Genre": "Animation, Action, Adventure",
+                  "imdbID": "tt0317705",
+                  "Response": "True"
+                }
+                """);
+            }
+
+            return MovieNotFoundResponse();
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "The Incredibels",
+            Year = 2005,
+            ApprovedForCommit = true
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Equal("The Incredibels", movie.Title);
+        Assert.Equal(2005, movie.Year);
+        Assert.Null(movie.ImdbId);
+        Assert.Equal("The Incredibles", movie.SuggestedTitle);
+        Assert.Equal(2004, movie.SuggestedYear);
+        Assert.Equal("tt0317705", movie.SuggestedImdbId);
+        Assert.Equal(
+            MetadataLookupFailureType.FuzzyCandidateYearConflict,
+            movie.MetadataLookupFailureType);
+        Assert.Equal(
+            MetadataMatchOrigin.YearRelaxedSpellCorrection,
+            movie.MetadataMatchOrigin);
+        Assert.Contains("filename year is 2005", movie.ReviewReason);
+        Assert.Contains("retrying the spelling correction without the year", movie.ReviewReason);
+        Assert.Contains(handler.RequestUris, uri =>
+            uri.Query.Contains("t=The%20Incredibles", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Query.Contains("&y=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EnrichAsync_YearRelaxedFuzzySearchRevealsCompetingIdentity_BlocksFalsePositive()
+    {
+        var handler = new RoutingHttpMessageHandler(request =>
+        {
+            var query = request.RequestUri!.Query;
+
+            if (query.Contains("?i=", StringComparison.Ordinal))
+            {
+                return Response(HttpStatusCode.OK, """
+                {
+                  "Response": "False",
+                  "Error": "Incorrect IMDb ID."
+                }
+                """);
+            }
+
+            if (query.Contains("?s=", StringComparison.Ordinal) &&
+                query.Contains("&y=2004", StringComparison.Ordinal))
+            {
+                return Response(HttpStatusCode.OK, """
+                {
+                  "Search": [
+                    { "Title": "Finding Neo", "Year": "2004", "imdbID": "tt0431065", "Type": "movie" }
+                  ],
+                  "totalResults": "1",
+                  "Response": "True"
+                }
+                """);
+            }
+
+            if (query.Contains("?s=", StringComparison.Ordinal) &&
+                !query.Contains("&y=", StringComparison.Ordinal))
+            {
+                return Response(HttpStatusCode.OK, """
+                {
+                  "Search": [
+                    { "Title": "Finding Nemo", "Year": "2003", "imdbID": "tt0266543", "Type": "movie" }
+                  ],
+                  "totalResults": "1",
+                  "Response": "True"
+                }
+                """);
+            }
+
+            return MovieNotFoundResponse();
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Finding Nimo",
+            Year = 2004,
+            ImdbId = "tt900000005",
+            ApprovedForCommit = true
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Equal("Finding Nimo", movie.Title);
+        Assert.Equal(2004, movie.Year);
+        Assert.Equal("tt900000005", movie.ImdbId);
+        Assert.Equal("Finding Neo", movie.SuggestedTitle);
+        Assert.Equal("tt0431065", movie.SuggestedImdbId);
+        Assert.Equal(
+            MetadataLookupFailureType.AmbiguousFuzzyCandidates,
+            movie.MetadataLookupFailureType);
+        Assert.Contains("Finding Nemo (2003)", movie.ReviewReason);
+        Assert.Contains("tt0266543", movie.ReviewReason);
+        Assert.Contains("removing the filename year", movie.MetadataDiscoveryReason);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_YearRelaxedSpellingRevealsCompetingIdentity_BlocksAutomaticMatch()
+    {
+        var handler = new RoutingHttpMessageHandler(request =>
+        {
+            var query = request.RequestUri!.Query;
+
+            if (query.Contains("t=Gladiator", StringComparison.OrdinalIgnoreCase) &&
+                query.Contains("&y=2000", StringComparison.Ordinal))
+            {
+                return Response(HttpStatusCode.OK, """
+                {
+                  "Title": "Gladiator",
+                  "Year": "2000",
+                  "imdbID": "tt0172495",
+                  "Response": "True"
+                }
+                """);
+            }
+
+            if (query.Contains("t=Gladiator", StringComparison.OrdinalIgnoreCase) &&
+                !query.Contains("&y=", StringComparison.Ordinal))
+            {
+                return Response(HttpStatusCode.OK, """
+                {
+                  "Title": "Gladiator",
+                  "Year": "2001",
+                  "imdbID": "tt9999999",
+                  "Response": "True"
+                }
+                """);
+            }
+
+            return MovieNotFoundResponse();
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Gladiater",
+            Year = 2000,
+            ApprovedForCommit = true
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Equal("Gladiater", movie.Title);
+        Assert.Null(movie.ImdbId);
+        Assert.Equal("Gladiator", movie.SuggestedTitle);
+        Assert.Equal("tt0172495", movie.SuggestedImdbId);
+        Assert.Equal(
+            MetadataLookupFailureType.AmbiguousFuzzyCandidates,
+            movie.MetadataLookupFailureType);
+        Assert.Contains("tt9999999", movie.ReviewReason);
+        Assert.DoesNotContain(handler.RequestUris, uri =>
+            uri.Query.Contains("?s=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EnrichAsync_YearRelaxedSpellingConfirmsSameIdentity_PreservesAutomaticMatch()
     {
         var handler = new StubHttpMessageHandler(new[]
         {
@@ -136,10 +379,11 @@ public sealed class OmdbMetadataServiceTests
             MovieNotFoundResponse(),
             Response(HttpStatusCode.OK, """
             {
-              "Search": [
-                { "Title": "Gladiator", "Year": "2000", "imdbID": "tt0172495", "Type": "movie" }
-              ],
-              "totalResults": "1",
+              "Title": "Gladiator",
+              "Year": "2000",
+              "Rated": "R",
+              "Genre": "Action, Adventure, Drama",
+              "imdbID": "tt0172495",
               "Response": "True"
             }
             """),
@@ -163,7 +407,169 @@ public sealed class OmdbMetadataServiceTests
         Assert.True(movie.IsFuzzyMatch);
         Assert.False(movie.NeedsReview);
         Assert.Equal("Gladiator", movie.Title);
-        Assert.Contains("s=Gladiat", handler.RequestUris[2].Query);
+        Assert.Equal(MetadataMatchOrigin.SpellCorrectedTitleYear, movie.MetadataMatchOrigin);
+        Assert.Equal(4, handler.RequestUris.Count);
+        Assert.Contains("t=Gladiator", handler.RequestUris[2].Query);
+        Assert.Contains("y=2000", handler.RequestUris[2].Query);
+        Assert.DoesNotContain("&y=", handler.RequestUris[3].Query);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_YearRelaxedVerificationApiFailure_FailsClosed()
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            MovieNotFoundResponse(),
+            MovieNotFoundResponse(),
+            Response(HttpStatusCode.OK, """
+            {
+              "Title": "Gladiator",
+              "Year": "2000",
+              "imdbID": "tt0172495",
+              "Response": "True"
+            }
+            """),
+            Response(HttpStatusCode.OK, """
+            {
+              "Response": "False",
+              "Error": "Invalid API key!"
+            }
+            """)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Gladiater",
+            Year = 2000,
+            ApprovedForCommit = true
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Equal("Gladiater", movie.Title);
+        Assert.Null(movie.ImdbId);
+        Assert.Equal(
+            MetadataLookupFailureType.InvalidApiKey,
+            movie.MetadataLookupFailureType);
+        Assert.Equal(4, handler.RequestUris.Count);
+    }
+
+    [Theory]
+    [InlineData("Gladiater.2000.1080p.mkv", "Gladiator", 2000, "tt0172495")]
+    [InlineData("Incepton.2010.1080p.mkv", "Inception", 2010, "tt1375666")]
+    [InlineData("Interstllar.2014.720p.mkv", "Interstellar", 2014, "tt0816692")]
+    [InlineData("Inceptioon.2010.1080p.mkv", "Inception", 2010, "tt1375666")]
+    public async Task EnrichAsync_ObviousOneEditFilenameTypo_UsesVerifiedSpellingCorrection(
+        string fileName,
+        string expectedTitle,
+        int expectedYear,
+        string expectedImdbId)
+    {
+        var handler = new RoutingHttpMessageHandler(request =>
+        {
+            var query = request.RequestUri!.Query;
+
+            if (query.Contains(
+                    $"t={Uri.EscapeDataString(expectedTitle)}",
+                    StringComparison.OrdinalIgnoreCase) &&
+                query.Contains($"&y={expectedYear}", StringComparison.Ordinal))
+            {
+                return Response(HttpStatusCode.OK, $$"""
+                {
+                  "Title": "{{expectedTitle}}",
+                  "Year": "{{expectedYear}}",
+                  "Rated": "PG-13",
+                  "Genre": "Drama",
+                  "imdbID": "{{expectedImdbId}}",
+                  "Response": "True"
+                }
+                """);
+            }
+
+            return MovieNotFoundResponse();
+        });
+        var service = CreateService(handler);
+        var movie = new Movie { FileName = fileName };
+        new FileNameParser().Parse(movie);
+
+        await service.EnrichAsync(movie);
+
+        Assert.True(movie.MetadataFetched);
+        Assert.False(movie.NeedsReview);
+        Assert.Equal(expectedTitle, movie.Title);
+        Assert.Equal(expectedYear, movie.Year);
+        Assert.Equal(expectedImdbId, movie.ImdbId);
+        Assert.True(movie.MatchConfidence >= 85);
+        Assert.Equal(MetadataMatchOrigin.SpellCorrectedTitleYear, movie.MetadataMatchOrigin);
+        Assert.Contains("spelling correction", movie.MetadataDiscoveryReason);
+        Assert.InRange(handler.RequestUris.Count, 4, 6);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_TitleOnlyCandidateWithMatchingYear_StillRequiresConfirmation()
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            MovieNotFoundResponse(),
+            Response(HttpStatusCode.OK, """
+            {
+              "Title": "Gladiator",
+              "Year": "2000",
+              "imdbID": "tt0172495",
+              "Response": "True"
+            }
+            """)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Gladiater",
+            Year = 2000,
+            ApprovedForCommit = true
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Equal("Gladiater", movie.Title);
+        Assert.Equal(2000, movie.Year);
+        Assert.Null(movie.ImdbId);
+        Assert.Equal("Gladiator", movie.SuggestedTitle);
+        Assert.Equal(2000, movie.SuggestedYear);
+        Assert.Equal("tt0172495", movie.SuggestedImdbId);
+        Assert.Equal(MetadataMatchOrigin.YearRelaxedTitle, movie.MetadataMatchOrigin);
+        Assert.Contains("manual confirmation", movie.ReviewReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, handler.RequestUris.Count);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_TitleOnlyCandidateWithoutYear_ShowsBlockedSuggestion()
+    {
+        var service = CreateService(
+            MovieNotFoundResponse(),
+            Response(HttpStatusCode.OK, """
+            {
+              "Title": "Unknown Year Movie",
+              "Year": "N/A",
+              "imdbID": "tt1234567",
+              "Response": "True"
+            }
+            """));
+        var movie = new Movie { Title = "Unknown Year Movie", Year = 2000 };
+
+        await service.EnrichAsync(movie);
+
+        Assert.True(movie.HasMetadataSuggestion);
+        Assert.False(movie.CanAcceptMetadataSuggestion);
+        Assert.Null(movie.SuggestedYear);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Contains("year is unavailable", movie.ReviewReason);
     }
 
     [Fact]
@@ -174,10 +580,9 @@ public sealed class OmdbMetadataServiceTests
             MovieNotFoundResponse(),
             Response(HttpStatusCode.OK, """
             {
-              "Search": [
-                { "Title": "Coming to America", "Year": "1988", "imdbID": "tt0094898", "Type": "movie" }
-              ],
-              "totalResults": "1",
+              "Title": "Coming to America",
+              "Year": "1988",
+              "imdbID": "tt0094898",
               "Response": "True"
             }
             """)
@@ -198,8 +603,12 @@ public sealed class OmdbMetadataServiceTests
         Assert.Equal(
             MetadataLookupFailureType.FuzzyCandidateYearConflict,
             movie.MetadataLookupFailureType);
-        Assert.Contains("release year conflicts", movie.ReviewReason);
+        Assert.Equal(MetadataMatchOrigin.YearRelaxedTitle, movie.MetadataMatchOrigin);
+        Assert.Contains("filename year is 1998", movie.ReviewReason);
+        Assert.Contains("retrying without the year", movie.ReviewReason);
         Assert.Equal(2, handler.RequestUris.Count);
+        Assert.Contains("y=1998", handler.RequestUris[0].Query);
+        Assert.DoesNotContain("&y=", handler.RequestUris[1].Query);
     }
 
     [Fact]
@@ -208,19 +617,26 @@ public sealed class OmdbMetadataServiceTests
         var handler = new StubHttpMessageHandler(new[]
         {
             MovieNotFoundResponse(),
+            MovieNotFoundResponse(),
             Response(HttpStatusCode.OK, """
             {
-              "Search": [
-                { "Title": "Batman Returns", "Year": "1992", "imdbID": "tt0103776", "Type": "movie" },
-                { "Title": "Batman Returns!", "Year": "1992", "imdbID": "tt9999999", "Type": "movie" }
-              ],
-              "totalResults": "2",
+              "Title": "Dark",
+              "Year": "2000",
+              "imdbID": "tt0100001",
+              "Response": "True"
+            }
+            """),
+            Response(HttpStatusCode.OK, """
+            {
+              "Title": "Draw",
+              "Year": "2000",
+              "imdbID": "tt0100002",
               "Response": "True"
             }
             """)
         });
         var service = CreateService(handler);
-        var movie = new Movie { Title = "Batman Retuns", Year = 1992 };
+        var movie = new Movie { Title = "Drak", Year = 2000 };
 
         await service.EnrichAsync(movie);
 
@@ -232,7 +648,80 @@ public sealed class OmdbMetadataServiceTests
             MetadataLookupFailureType.AmbiguousFuzzyCandidates,
             movie.MetadataLookupFailureType);
         Assert.Contains("too closely", movie.ReviewReason);
-        Assert.Equal(2, handler.RequestUris.Count);
+        Assert.Equal(4, handler.RequestUris.Count);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_JawzSpellingCandidates_RemainAmbiguousAndBlocked()
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            MovieNotFoundResponse(),
+            Response(HttpStatusCode.OK, """
+            {
+              "Title": "Jazz",
+              "Year": "1994",
+              "imdbID": "tt0110182",
+              "Response": "True"
+            }
+            """),
+            Response(HttpStatusCode.OK, """
+            {
+              "Title": "Jaws",
+              "Year": "1975",
+              "imdbID": "tt0073195",
+              "Response": "True"
+            }
+            """)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie { Title = "Jawz" };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Equal("Jawz", movie.Title);
+        Assert.Equal(
+            MetadataLookupFailureType.AmbiguousFuzzyCandidates,
+            movie.MetadataLookupFailureType);
+        Assert.Contains("too closely", movie.ReviewReason);
+        Assert.Equal(3, handler.RequestUris.Count);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_AmbiguousFuzzySearchCandidates_RemainNeedsReview()
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            MovieNotFoundResponse(),
+            MovieNotFoundResponse(),
+            Response(HttpStatusCode.OK, """
+            {
+              "Search": [
+                { "Title": "Batman Returns", "Year": "1992", "imdbID": "tt0103776", "Type": "movie" },
+                { "Title": "Batmen Returns", "Year": "1992", "imdbID": "tt9999999", "Type": "movie" }
+              ],
+              "totalResults": "2",
+              "Response": "True"
+            }
+            """)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie { Title = "Batm4n Returns", Year = 1992 };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.NotNull(movie.SuggestedTitle);
+        Assert.Equal(
+            MetadataLookupFailureType.AmbiguousFuzzyCandidates,
+            movie.MetadataLookupFailureType);
+        Assert.Equal(MetadataMatchOrigin.FuzzySearchTitleYear, movie.MetadataMatchOrigin);
+        Assert.Equal(3, handler.RequestUris.Count);
     }
 
     [Fact]
@@ -240,6 +729,16 @@ public sealed class OmdbMetadataServiceTests
     {
         var service = CreateService(
             MovieNotFoundResponse(),
+            MovieNotFoundResponse(),
+            Response(HttpStatusCode.OK, """
+            {
+              "Search": [
+                { "Title": "Gladiator", "Year": "2000", "imdbID": "tt0172495", "Type": "movie" }
+              ],
+              "totalResults": "1",
+              "Response": "True"
+            }
+            """),
             Response(HttpStatusCode.OK, """
             {
               "Search": [
@@ -257,13 +756,13 @@ public sealed class OmdbMetadataServiceTests
               "Response": "True"
             }
             """));
-        var movie = new Movie { Title = "Gladiater", Year = 2000 };
+        var movie = new Movie { Title = "Gladiat0r", Year = 2000 };
 
         await service.EnrichAsync(movie);
 
         Assert.False(movie.MetadataFetched);
         Assert.True(movie.NeedsReview);
-        Assert.Equal("Gladiater", movie.Title);
+        Assert.Equal("Gladiat0r", movie.Title);
         Assert.Equal(2000, movie.Year);
         Assert.Null(movie.ImdbId);
         Assert.Equal("Gladiator", movie.SuggestedTitle);
@@ -292,6 +791,64 @@ public sealed class OmdbMetadataServiceTests
             movie.MetadataLookupFailureType);
         Assert.Single(handler.RequestUris);
         Assert.DoesNotContain("s=", handler.RequestUris[0].Query);
+    }
+
+    [Theory]
+    [InlineData("Invalid API key!", MetadataLookupFailureType.InvalidApiKey)]
+    [InlineData("Request limit reached!", MetadataLookupFailureType.RequestLimitReached)]
+    public async Task EnrichAsync_NonNotFoundTitleOnlyFailure_StopsAllLaterFallbacks(
+        string error,
+        MetadataLookupFailureType expectedFailure)
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            MovieNotFoundResponse(),
+            Response(HttpStatusCode.OK, $$"""
+            {
+              "Response": "False",
+              "Error": "{{error}}"
+            }
+            """)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie { Title = "Gladiater", Year = 2000 };
+
+        await service.EnrichAsync(movie);
+
+        Assert.Equal(expectedFailure, movie.MetadataLookupFailureType);
+        Assert.Equal(2, handler.RequestUris.Count);
+        Assert.DoesNotContain(handler.RequestUris, uri => uri.Query.Contains("?s="));
+    }
+
+    [Fact]
+    public async Task EnrichAsync_RecoveryRequestCount_IsBoundedAtFourteenTotalRequests()
+    {
+        var handler = new RoutingHttpMessageHandler(request =>
+        {
+            if (request.RequestUri!.Query.Contains("?s=", StringComparison.Ordinal))
+            {
+                return Response(HttpStatusCode.OK, """
+                {
+                  "Search": [
+                    { "Title": "Entirely Unrelated", "Year": "1980", "imdbID": "tt0000001", "Type": "movie" }
+                  ],
+                  "totalResults": "20",
+                  "Response": "True"
+                }
+                """);
+            }
+
+            return MovieNotFoundResponse();
+        }, maximumRequests: 14);
+        var service = CreateService(handler);
+        var movie = new Movie { Title = "Drak Movi", Year = 2000 };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.Equal(MetadataLookupFailureType.MovieNotFound, movie.MetadataLookupFailureType);
+        Assert.Equal(14, handler.RequestUris.Count);
     }
 
     [Fact]
@@ -359,7 +916,12 @@ public sealed class OmdbMetadataServiceTests
           "Error": "{{omdbError}}"
         }
         """));
-        var movie = new Movie { Title = "Inception", Year = 2010 };
+        var movie = new Movie
+        {
+            Title = "Inception",
+            Year = 2010,
+            ImdbId = "tt1375666"
+        };
 
         await service.EnrichAsync(movie);
 
@@ -391,7 +953,12 @@ public sealed class OmdbMetadataServiceTests
     {
         var service = CreateService(new ThrowingHttpMessageHandler(
             new HttpRequestException("Simulated network failure")));
-        var movie = new Movie { Title = "Inception", Year = 2010 };
+        var movie = new Movie
+        {
+            Title = "Inception",
+            Year = 2010,
+            ImdbId = "tt1375666"
+        };
 
         await service.EnrichAsync(movie);
 
@@ -408,7 +975,12 @@ public sealed class OmdbMetadataServiceTests
     {
         var service = CreateService(new ThrowingHttpMessageHandler(
             new TaskCanceledException("Simulated timeout")));
-        var movie = new Movie { Title = "Inception", Year = 2010 };
+        var movie = new Movie
+        {
+            Title = "Inception",
+            Year = 2010,
+            ImdbId = "tt1375666"
+        };
 
         await service.EnrichAsync(movie);
 
@@ -459,13 +1031,457 @@ public sealed class OmdbMetadataServiceTests
     }
 
     [Fact]
+    public async Task EnrichAsync_ValidImdbIdWithMatchingIdentity_EnrichesNormally()
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(HttpStatusCode.OK, SuccessfulResponse)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Inception",
+            Year = 2010,
+            ImdbId = "tt1375666"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.True(movie.MetadataFetched);
+        Assert.True(movie.MetadataMatchedByImdbId);
+        Assert.False(movie.NeedsReview);
+        Assert.Equal("Inception", movie.Title);
+        Assert.Equal(2010, movie.Year);
+        Assert.Equal("tt1375666", movie.ImdbId);
+        Assert.Equal("PG-13", movie.MpaRating);
+        Assert.Equal("Action", movie.PrimaryGenre);
+        Assert.Equal(MetadataLookupFailureType.None, movie.MetadataLookupFailureType);
+        Assert.Single(handler.RequestUris);
+        Assert.Contains("?i=tt1375666", handler.RequestUris[0].Query);
+    }
+
+    [Theory]
+    [InlineData(
+        "Some Other Movie",
+        2010,
+        "The provided IMDb ID does not match the movie title provided.")]
+    [InlineData(
+        "Inception",
+        1999,
+        "The provided IMDb ID does not match the movie year provided.")]
+    [InlineData(
+        "Some Other Movie",
+        1999,
+        "The provided IMDb ID does not match the movie title or year provided.")]
+    public async Task EnrichAsync_ValidImdbIdentityConflict_BlocksWithoutFallbackOrOverwrite(
+        string parsedTitle,
+        int parsedYear,
+        string expectedReason)
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(HttpStatusCode.OK, SuccessfulResponse)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = parsedTitle,
+            Year = parsedYear,
+            ImdbId = "tt1375666",
+            ApprovedForCommit = true
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.MetadataMatchedByImdbId);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Equal(expectedReason, movie.ReviewReason);
+        Assert.Equal(MetadataLookupFailureType.ImdbIdentityConflict, movie.MetadataLookupFailureType);
+        Assert.Equal(parsedTitle, movie.Title);
+        Assert.Equal(parsedYear, movie.Year);
+        Assert.Equal("tt1375666", movie.ImdbId);
+        Assert.Equal("Inception", movie.SuggestedTitle);
+        Assert.Equal(2010, movie.SuggestedYear);
+        Assert.Equal("tt1375666", movie.SuggestedImdbId);
+        Assert.Contains("Provided:", movie.MetadataLookupFailureDetail);
+        Assert.Contains("IMDb ID identifies:", movie.MetadataLookupFailureDetail);
+        Assert.Single(handler.RequestUris);
+        Assert.Contains("?i=", handler.RequestUris[0].Query);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_ValidImdbConflictWithHighNumericalConfidence_StillRequiresReview()
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(HttpStatusCode.OK, SuccessfulResponse)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Inceptiom",
+            Year = 2010,
+            ImdbId = "tt1375666"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.True(movie.MatchConfidence >= 85);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.MetadataFetched);
+        Assert.Equal(MetadataLookupFailureType.ImdbIdentityConflict, movie.MetadataLookupFailureType);
+        Assert.Single(handler.RequestUris);
+    }
+
+    [Theory]
+    [InlineData("  INCEPTION!!!  ")]
+    [InlineData("The Inception")]
+    public async Task EnrichAsync_ValidImdbIdWithHarmlessTitleFormatting_DoesNotConflict(
+        string parsedTitle)
+    {
+        var service = CreateService(Response(HttpStatusCode.OK, SuccessfulResponse));
+        var movie = new Movie
+        {
+            Title = parsedTitle,
+            Year = 2010,
+            ImdbId = "tt1375666"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.True(movie.MetadataFetched);
+        Assert.False(movie.NeedsReview);
+        Assert.Equal(MetadataLookupFailureType.None, movie.MetadataLookupFailureType);
+        Assert.Equal("Inception", movie.Title);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_ValidImdbIdWithoutParsedYear_DoesNotInventYearConflict()
+    {
+        var service = CreateService(Response(HttpStatusCode.OK, SuccessfulResponse));
+        var movie = new Movie
+        {
+            Title = "Inception",
+            ImdbId = "tt1375666"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.True(movie.MetadataFetched);
+        Assert.False(movie.NeedsReview);
+        Assert.Equal(2010, movie.Year);
+    }
+
+    [Theory]
+    [InlineData("Movie not found!")]
+    [InlineData("Incorrect IMDb ID.")]
+    [InlineData("Error getting data.")]
+    public async Task EnrichAsync_UnresolvedImdbId_RecoversByExactTitleYearAndReplacesId(
+        string initialError)
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(HttpStatusCode.OK, $$"""
+            {
+              "Response": "False",
+              "Error": "{{initialError}}"
+            }
+            """),
+            Response(HttpStatusCode.OK, SuccessfulResponse)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Inception",
+            Year = 2010,
+            ImdbId = "tt0000000"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.True(movie.MetadataFetched);
+        Assert.False(movie.MetadataMatchedByImdbId);
+        Assert.False(movie.NeedsReview);
+        Assert.Equal("tt1375666", movie.ImdbId);
+        Assert.Equal(MetadataMatchOrigin.ExactTitleYear, movie.MetadataMatchOrigin);
+        Assert.Contains("did not resolve", movie.MetadataDiscoveryReason);
+        Assert.Equal(2, handler.RequestUris.Count);
+        Assert.Contains("?i=tt0000000", handler.RequestUris[0].Query);
+        Assert.Contains("?t=Inception", handler.RequestUris[1].Query);
+        Assert.Contains("&y=2010", handler.RequestUris[1].Query);
+    }
+
+    [Theory]
+    [InlineData("Incorrect IMDb ID.")]
+    [InlineData("Error getting data.")]
+    public async Task EnrichAsync_TitleLookupWithImdbSpecificError_DoesNotEnterImdbRecovery(
+        string error)
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(HttpStatusCode.OK, $$"""
+            {
+              "Response": "False",
+              "Error": "{{error}}"
+            }
+            """)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie { Title = "Inception", Year = 2010 };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.Equal(MetadataLookupFailureType.OmdbError, movie.MetadataLookupFailureType);
+        Assert.Single(handler.RequestUris);
+        Assert.Contains("?t=Inception", handler.RequestUris[0].Query);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_UnresolvedImdbAndTitleYear_TitleOnlyCandidateUsesExistingReviewPolicy()
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(HttpStatusCode.OK, """
+            {
+              "Response": "False",
+              "Error": "Incorrect IMDb ID."
+            }
+            """),
+            MovieNotFoundResponse(),
+            Response(HttpStatusCode.OK, SuccessfulResponse)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Inception",
+            Year = 2011,
+            ImdbId = "tt0000000"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Equal("Inception", movie.Title);
+        Assert.Equal(2011, movie.Year);
+        Assert.Equal("tt0000000", movie.ImdbId);
+        Assert.Equal("Inception", movie.SuggestedTitle);
+        Assert.Equal(2010, movie.SuggestedYear);
+        Assert.Equal("tt1375666", movie.SuggestedImdbId);
+        Assert.Equal(MetadataMatchOrigin.YearRelaxedTitle, movie.MetadataMatchOrigin);
+        Assert.Equal(3, handler.RequestUris.Count);
+        Assert.Contains("&y=2011", handler.RequestUris[1].Query);
+        Assert.DoesNotContain("&y=", handler.RequestUris[2].Query);
+    }
+
+    [Theory]
+    [InlineData("Movie not found!")]
+    [InlineData("Incorrect IMDb ID.")]
+    [InlineData("Error getting data.")]
+    public async Task EnrichAsync_UnresolvedImdbWithMisspelledTitle_PreservesBoundedTypoRecovery(
+        string initialError)
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(HttpStatusCode.OK, $$"""
+            {
+              "Response": "False",
+              "Error": "{{initialError}}"
+            }
+            """),
+            MovieNotFoundResponse(),
+            MovieNotFoundResponse(),
+            Response(HttpStatusCode.OK, """
+            {
+              "Title": "Gladiator",
+              "Year": "2000",
+              "Rated": "R",
+              "Genre": "Action, Adventure, Drama",
+              "imdbID": "tt0172495",
+              "Response": "True"
+            }
+            """),
+            Response(HttpStatusCode.OK, """
+            {
+              "Title": "Gladiator",
+              "Year": "2000",
+              "Rated": "R",
+              "Genre": "Action, Adventure, Drama",
+              "imdbID": "tt0172495",
+              "Response": "True"
+            }
+            """)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Gladiater",
+            Year = 2000,
+            ImdbId = "tt0000000"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.True(movie.MetadataFetched);
+        Assert.False(movie.NeedsReview);
+        Assert.Equal("Gladiator", movie.Title);
+        Assert.Equal(2000, movie.Year);
+        Assert.Equal("tt0172495", movie.ImdbId);
+        Assert.Equal(MetadataMatchOrigin.SpellCorrectedTitleYear, movie.MetadataMatchOrigin);
+        Assert.Equal(5, handler.RequestUris.Count);
+        Assert.Contains("?i=", handler.RequestUris[0].Query);
+        Assert.Contains("&y=2000", handler.RequestUris[1].Query);
+        Assert.DoesNotContain("&y=", handler.RequestUris[2].Query);
+        Assert.Contains("t=Gladiator", handler.RequestUris[3].Query);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_UnresolvedImdbWithoutTitle_DoesNotAttemptYearOnlyRecovery()
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(HttpStatusCode.OK, """
+            {
+              "Response": "False",
+              "Error": "Incorrect IMDb ID."
+            }
+            """)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Year = 1999,
+            ImdbId = "tt900000009"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Equal("tt900000009", movie.ImdbId);
+        Assert.Contains("no title was available", movie.ReviewReason, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(handler.RequestUris);
+        Assert.Contains("?i=tt900000009", handler.RequestUris[0].Query);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_UnresolvedImdbWithNoRecovery_RemainsBoundedNeedsReview()
+    {
+        var handler = new RoutingHttpMessageHandler(
+            _ => MovieNotFoundResponse(),
+            maximumRequests: 13);
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Drak Movi",
+            Year = 2000,
+            ImdbId = "tt0000000"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.Equal("tt0000000", movie.ImdbId);
+        Assert.Equal(MetadataLookupFailureType.MovieNotFound, movie.MetadataLookupFailureType);
+        Assert.Equal(11, handler.RequestUris.Count);
+        Assert.InRange(handler.RequestUris.Count, 1, 13);
+    }
+
+    [Theory]
+    [InlineData("Invalid API key!", MetadataLookupFailureType.InvalidApiKey)]
+    [InlineData("Request limit reached!", MetadataLookupFailureType.RequestLimitReached)]
+    public async Task EnrichAsync_ImdbApiFailure_DoesNotFallBackToTitle(
+        string error,
+        MetadataLookupFailureType expectedFailure)
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(HttpStatusCode.OK, $$"""
+            {
+              "Response": "False",
+              "Error": "{{error}}"
+            }
+            """)
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Inception",
+            Year = 2010,
+            ImdbId = "tt1375666"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.Equal(expectedFailure, movie.MetadataLookupFailureType);
+        Assert.Single(handler.RequestUris);
+        Assert.Contains("?i=", handler.RequestUris[0].Query);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task EnrichAsync_ImdbHttpFailure_DoesNotFallBackToTitle(HttpStatusCode statusCode)
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(statusCode, "Service failure")
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Inception",
+            Year = 2010,
+            ImdbId = "tt1375666"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(movie.MetadataFetched);
+        Assert.True(movie.NeedsReview);
+        Assert.Equal(MetadataLookupFailureType.HttpFailure, movie.MetadataLookupFailureType);
+        Assert.Single(handler.RequestUris);
+        Assert.Contains("?i=", handler.RequestUris[0].Query);
+    }
+
+    [Fact]
+    public async Task EnrichAsync_MalformedImdbResponse_DoesNotFallBackToTitle()
+    {
+        var handler = new StubHttpMessageHandler(new[]
+        {
+            Response(HttpStatusCode.OK, "not-json")
+        });
+        var service = CreateService(handler);
+        var movie = new Movie
+        {
+            Title = "Inception",
+            Year = 2010,
+            ImdbId = "tt1375666"
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.Equal(MetadataLookupFailureType.MalformedResponse, movie.MetadataLookupFailureType);
+        Assert.Single(handler.RequestUris);
+    }
+
+    [Fact]
     public async Task EnrichAsync_SuccessfulImdbLookup_PreservesUnrelatedReview()
     {
         var service = CreateService(Response(HttpStatusCode.OK, SuccessfulResponse));
         var movie = new Movie
         {
-            Title = "Completely Wrong Parsed Title",
-            Year = 1999,
+            Title = "Inception",
+            Year = 2010,
             ImdbId = "tt1375666"
         };
         movie.RequireReview("Edition requires human verification");
@@ -546,6 +1562,37 @@ public sealed class OmdbMetadataServiceTests
             }
 
             return Task.FromResult(_responses.Dequeue());
+        }
+    }
+
+    private sealed class RoutingHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responseFactory;
+        private readonly int _maximumRequests;
+
+        public List<Uri> RequestUris { get; } = new();
+
+        public RoutingHttpMessageHandler(
+            Func<HttpRequestMessage, HttpResponseMessage> responseFactory,
+            int maximumRequests = 12)
+        {
+            _responseFactory = responseFactory;
+            _maximumRequests = maximumRequests;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestUris.Add(request.RequestUri!);
+
+            if (RequestUris.Count > _maximumRequests)
+            {
+                throw new InvalidOperationException(
+                    $"OMDb recovery exceeded the {_maximumRequests}-request safety bound.");
+            }
+
+            return Task.FromResult(_responseFactory(request));
         }
     }
 

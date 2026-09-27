@@ -234,11 +234,22 @@ namespace PIM.Core.Models
 
         public string? SuggestedImdbId { get; set; }
 
+        public bool HasMetadataSuggestion =>
+            !string.IsNullOrWhiteSpace(SuggestedTitle) &&
+            !string.IsNullOrWhiteSpace(SuggestedImdbId);
+
+        public bool CanAcceptMetadataSuggestion =>
+            HasMetadataSuggestion && SuggestedYear.HasValue;
+
         public double? MatchConfidence { get; set; }
 
         public bool IsFuzzyMatch { get; set; }
 
         public bool MetadataMatchedByImdbId { get; set; }
+
+        public MetadataMatchOrigin MetadataMatchOrigin { get; set; }
+
+        public string? MetadataDiscoveryReason { get; set; }
 
         // =========================================================
         // File Information
@@ -279,6 +290,12 @@ namespace PIM.Core.Models
         public Guid? DestinationProfileId { get; set; }
 
         public int DestinationProfileRevision { get; set; }
+
+        /// <summary>
+        /// Workflow policy used for the current target/conflict plan. Metadata
+        /// remains reusable when this changes; only downstream planning reruns.
+        /// </summary>
+        public LibraryGoal? PlannedLibraryGoal { get; set; }
 
         // =========================================================
         // Status / Errors
