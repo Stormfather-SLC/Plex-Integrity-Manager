@@ -323,6 +323,26 @@ namespace PIM.Infrastructure.Services
                             continue;
                         }
 
+                        // The file must still be the one that was scanned and
+                        // reviewed. Checked in dry run too (reading metadata
+                        // only) so a changed or missing file shows up before
+                        // live commit.
+                        var sourceProblem = GetSourceProblem(movie);
+
+                        if (sourceProblem != null)
+                        {
+                            movie.ApprovedForCommit = false;
+                            movie.RequireReview(sourceProblem);
+                            movie.Status = sourceProblem;
+                            Console.WriteLine(
+                                $"[PIM] Skipped: {displayName} - {sourceProblem}");
+                            RecordBestEffort(OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.Skipped,
+                                movie,
+                                sourceProblem));
+                            continue;
+                        }
+
                         if (dryRun)
                         {
                             movie.Status = "Dry Run Complete";
@@ -330,18 +350,6 @@ namespace PIM.Infrastructure.Services
                                 $"[PIM] Would move: {movie.OriginalFilePath} -> {movie.TargetPath}");
                             RecordBestEffort(OperationJournalEntry.ForMovie(
                                 OperationJournalEvent.WouldMove,
-                                movie));
-                            continue;
-                        }
-
-                        if (!File.Exists(movie.OriginalFilePath))
-                        {
-                            movie.Status = "Source File Missing";
-                            movie.ApprovedForCommit = false;
-                            Console.WriteLine(
-                                $"[PIM] Skipped: source file missing - {movie.OriginalFilePath}");
-                            RecordBestEffort(OperationJournalEntry.ForMovie(
-                                OperationJournalEvent.Skipped,
                                 movie));
                             continue;
                         }
@@ -365,11 +373,6 @@ namespace PIM.Infrastructure.Services
                                 destinationResult.Message));
                             continue;
                         }
-
-                        var targetDirectory = Path.GetDirectoryName(movie.TargetPath);
-
-                        if (!string.IsNullOrWhiteSpace(targetDirectory))
-                            Directory.CreateDirectory(targetDirectory);
 
                         if (File.Exists(movie.TargetPath))
                         {
@@ -411,6 +414,14 @@ namespace PIM.Infrastructure.Services
                                 $"[PIM] Not moved: {displayName} - operation journal write failed: {journalEx.Message}");
                             continue;
                         }
+
+                        // Create the destination folder only once the move is
+                        // recorded and about to happen, so a refused move
+                        // leaves no empty folders behind.
+                        var targetDirectory = Path.GetDirectoryName(movie.TargetPath);
+
+                        if (!string.IsNullOrWhiteSpace(targetDirectory))
+                            Directory.CreateDirectory(targetDirectory);
 
                         File.Move(
                             movie.OriginalFilePath,
@@ -844,6 +855,38 @@ namespace PIM.Infrastructure.Services
             return !string.IsNullOrWhiteSpace(movie.Title) &&
                    movie.Year.HasValue &&
                    !string.IsNullOrWhiteSpace(movie.ImdbId);
+        }
+
+        /// <summary>
+        /// Returns why the source file can no longer be trusted to be the file
+        /// that was scanned and reviewed, or null when it still matches.
+        /// Reads file metadata only.
+        /// </summary>
+        private static string? GetSourceProblem(Movie movie)
+        {
+            FileInfo source;
+
+            try
+            {
+                source = new FileInfo(movie.OriginalFilePath);
+
+                if (!source.Exists)
+                    return "Source file is missing. Scan again before committing.";
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return $"Source file could not be checked ({ex.Message}). Scan again before committing.";
+            }
+
+            if (source.Length != movie.FileSizeBytes)
+            {
+                return
+                    $"Source file changed since it was scanned (was {movie.FileSizeBytes:N0} bytes, now {source.Length:N0}). " +
+                    "Scan again before committing.";
+            }
+
+            return null;
         }
 
         /// <summary>
