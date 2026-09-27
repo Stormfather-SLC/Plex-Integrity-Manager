@@ -622,7 +622,9 @@ namespace PIM.Web.Pages
             }
 
             var sortedMovies = cachedMovies
-                .OrderBy(movie => movie.Title)
+                .OrderByDescending(movie => movie.HasError)
+                .ThenByDescending(movie => movie.NeedsReview)
+                .ThenBy(movie => movie.Title)
                 .ThenByDescending(movie => movie.KeepRecommended)
                 .ThenByDescending(movie => movie.FileSizeBytes)
                 .ToList();
@@ -630,6 +632,8 @@ namespace PIM.Web.Pages
             Movies = showOnlyRecommended
                 ? sortedMovies
                     .Where(movie =>
+                        movie.NeedsReview ||
+                        movie.HasError ||
                         !movie.IsDuplicate ||
                         movie.KeepRecommended ||
                         movie.IsAlternateVersion)
@@ -727,17 +731,11 @@ namespace PIM.Web.Pages
 
         private void BuildPreviewTree()
         {
-            if (!string.IsNullOrWhiteSpace(ActiveDestinationProfile.DestinationRoot) &&
-                Movies.Any(movie => !string.IsNullOrWhiteSpace(movie.TargetPath)))
-            {
-                PreviewTree = _treeService.BuildTree(
+            PreviewTree = Movies.Any()
+                ? _treeService.BuildTree(
                     Movies,
-                    ActiveDestinationProfile.DestinationRoot);
-            }
-            else
-            {
-                PreviewTree = null;
-            }
+                    ActiveDestinationProfile.DestinationRoot)
+                : null;
         }
 
         private bool HasMatchingDryRunApproval(

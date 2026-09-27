@@ -142,10 +142,10 @@ Follow this roadmap unless the user explicitly changes the priority:
   - Production pagination validated against a real Plex library.
   - Automated pagination regression tests are present.
   - Real-world read-only validation successfully found a movie at Plex pagination offset 2500 through the normal PIM pipeline.
-- Phase One plan (`pim-phase-one-plan.md`, kept outside this repository): steps 1–3 complete, confirmed by the owner on 2026-09-27.
-  - Steps 1–2: PRs #14–#18 (MVP trustworthiness fixes, cleanup, source-folder normalization, missing-credential startup, durable operation journal).
-  - Step 3: PR #19 — scans, review decisions, and dry-run approvals persist across restarts.
-- Current priority: Phase One plan step 4.
+- Phase One work completed and confirmed by the owner on 2026-09-27 (the original `pim-phase-one-plan.md` is lost; this roadmap is now the plan of record):
+  - PRs #14–#18: MVP trustworthiness fixes, cleanup, source-folder normalization, missing-credential startup, durable operation journal.
+  - PR #19: scans, review decisions, and dry-run approvals persist across restarts.
+- Current priority: Needs Review visibility and behavior (roadmap item 3).
 
 Update this status only when the user explicitly confirms that a roadmap milestone has been completed or reprioritized.
 

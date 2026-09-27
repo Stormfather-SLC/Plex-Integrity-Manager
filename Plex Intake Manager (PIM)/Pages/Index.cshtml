@@ -199,6 +199,16 @@
         background-color: #d4edda;
         color: #0f5132;
     }
+
+    .movie-filter-card,
+    .dry-run-filter-card {
+        cursor: pointer;
+    }
+
+    .movie-filter-card.active,
+    .dry-run-filter-card.active {
+        box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
+    }
 </style>
 
 <!-- =========================================================
@@ -584,7 +594,7 @@
             </button>
         </li>
 
-        @if (Model.Movies.Any(m => !string.IsNullOrWhiteSpace(m.ImdbId)))
+        @if (Model.Movies.Any())
         {
             <!-- Preview Tree -->
             <li class="nav-item" role="presentation">
@@ -609,6 +619,73 @@
         <div class="tab-pane fade show active"
              id="movies-pane"
              role="tabpanel">
+
+            <div class="row g-3 mb-3">
+                <div class="col-6 col-lg-3 d-flex">
+                    <button type="button"
+                            class="card h-100 text-center w-100 movie-filter-card"
+                            data-movie-filter="ready"
+                            aria-pressed="false">
+                        <span class="card-body">
+                            <span class="fs-4 fw-bold text-success">
+                                @Model.Movies.Count(movie =>
+                                    !movie.HasError &&
+                                    !movie.NeedsReview &&
+                                    (!movie.IsDuplicate || movie.KeepRecommended || movie.IsAlternateVersion))
+                            </span>
+                            <span class="d-block">Ready / Keep</span>
+                        </span>
+                    </button>
+                </div>
+                <div class="col-6 col-lg-3 d-flex">
+                    <button type="button"
+                            class="card h-100 text-center w-100 movie-filter-card"
+                            data-movie-filter="duplicate"
+                            aria-pressed="false">
+                        <span class="card-body">
+                            <span class="fs-4 fw-bold" style="color:#8a1538;">
+                                @Model.Movies.Count(movie =>
+                                    !movie.HasError &&
+                                    !movie.NeedsReview &&
+                                    movie.IsDuplicate &&
+                                    !movie.KeepRecommended &&
+                                    !movie.IsAlternateVersion)
+                            </span>
+                            <span class="d-block">Duplicates</span>
+                        </span>
+                    </button>
+                </div>
+                <div class="col-6 col-lg-3 d-flex">
+                    <button type="button"
+                            class="card h-100 text-center w-100 movie-filter-card"
+                            data-movie-filter="review"
+                            aria-pressed="false">
+                        <span class="card-body">
+                            <span class="fs-4 fw-bold text-primary">
+                                @Model.Movies.Count(movie => movie.NeedsReview && !movie.HasError)
+                            </span>
+                            <span class="d-block">Needs Review</span>
+                        </span>
+                    </button>
+                </div>
+                <div class="col-6 col-lg-3 d-flex">
+                    <button type="button"
+                            class="card h-100 text-center w-100 movie-filter-card"
+                            data-movie-filter="error"
+                            aria-pressed="false">
+                        <span class="card-body">
+                            <span class="fs-4 fw-bold text-danger">
+                                @Model.Movies.Count(movie => movie.HasError)
+                            </span>
+                            <span class="d-block">Errors</span>
+                        </span>
+                    </button>
+                </div>
+            </div>
+
+            <p id="movieFilterStatus" class="text-muted">
+                Select a summary card to filter the movie results. Select it again to show all movies.
+            </p>
 
             <div style="max-height:700px; overflow:auto;">
 
@@ -646,7 +723,17 @@
                             movie.IsAlternateVersion ? "row-alt" :
                             "";
 
-                            <tr class="@rowClass">
+                            var movieCategory =
+                                movie.HasError ? "error" :
+                                movie.NeedsReview ? "review" :
+                                (movie.IsDuplicate &&
+                                 !movie.KeepRecommended &&
+                                 !movie.IsAlternateVersion)
+                                    ? "duplicate"
+                                    : "ready";
+
+                            <tr class="movie-results-row @rowClass"
+                                data-movie-category="@movieCategory">
 
                                 <td style="text-align:center;">
                                     <input type="checkbox"
@@ -721,7 +808,15 @@
                                     {
                                         <div class="alert alert-primary mb-1 p-2" style="font-size:0.8em;">
                                             <div class="fw-bold">Execution blocked</div>
-                                            <div><strong>Reason:</strong> @movie.ReviewReason</div>
+                                            <div><strong>Why this needs review:</strong></div>
+                                            <ul class="mb-1 ps-3">
+                                                @foreach (var reason in (movie.ReviewReason ?? "Review required before commit").Split(
+                                                    " | ",
+                                                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                                                {
+                                                    <li>@reason</li>
+                                                }
+                                            </ul>
                                             <div><strong>Source:</strong> <span class="text-break">@movie.OriginalFilePath</span></div>
                                             <div><strong>Parsed identity:</strong> @movie.Title (@(movie.Year?.ToString() ?? "year unknown"))</div>
                                             <div><strong>IMDb ID:</strong> @(string.IsNullOrWhiteSpace(movie.ImdbId) ? "Not determined" : movie.ImdbId)</div>
@@ -741,14 +836,6 @@
                                             @if (movie.IsDuplicate)
                                             {
                                                 <div><strong>Duplicate decision:</strong> @(movie.KeepRecommended ? "Recommended copy" : "Not selected as the preferred copy")</div>
-                                            }
-                                            @if (movie.HasDestinationConflict && !string.IsNullOrWhiteSpace(movie.ExistingDestinationPath))
-                                            {
-                                                <div><strong>Existing destination:</strong> <span class="text-break">@movie.ExistingDestinationPath</span></div>
-                                            }
-                                            @if (movie.HasPlexLibraryConflict && !string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath))
-                                            {
-                                                <div><strong>Existing Plex path:</strong> <span class="text-break">@movie.ExistingPlexLibraryPath</span></div>
                                             }
                                             @if (movie.HasMetadataSuggestion)
                                             {
@@ -772,6 +859,46 @@
                                                     {
                                                         <div class="mt-1">OMDb did not provide a release year, so this suggestion cannot be accepted safely.</div>
                                                     }
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+
+                                    @if (movie.HasDestinationConflict)
+                                    {
+                                        <div class="alert alert-warning mt-1 mb-0 p-2" style="font-size:0.8em;">
+                                            <strong>Destination Conflict</strong>
+                                            <div><strong>Reason:</strong> @movie.DestinationConflictReason</div>
+                                            @if (!string.IsNullOrWhiteSpace(movie.ExistingDestinationPath))
+                                            {
+                                                <div class="text-break">
+                                                    <strong>Existing Path:</strong> @movie.ExistingDestinationPath
+                                                </div>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(movie.TargetPath))
+                                            {
+                                                <div class="text-break">
+                                                    <strong>Proposed Path:</strong> @movie.TargetPath
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+
+                                    @if (movie.HasPlexLibraryConflict)
+                                    {
+                                        <div class="alert alert-info mt-1 mb-0 p-2" style="font-size:0.8em;">
+                                            <strong>Plex Library Conflict</strong>
+                                            <div><strong>Reason:</strong> @movie.PlexLibraryConflictReason</div>
+                                            @if (!string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath))
+                                            {
+                                                <div class="text-break">
+                                                    <strong>Existing Plex Path:</strong> @movie.ExistingPlexLibraryPath
+                                                </div>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(movie.TargetPath))
+                                            {
+                                                <div class="text-break">
+                                                    <strong>Proposed Path:</strong> @movie.TargetPath
                                                 </div>
                                             }
                                         </div>
@@ -812,7 +939,7 @@
             </div>
         </div>
 
-        @if (Model.Movies.Any(m => !string.IsNullOrWhiteSpace(m.ImdbId)))
+        @if (Model.Movies.Any())
         {
             <!-- =================================================
                  🌳 PREVIEW TREE TAB
@@ -942,6 +1069,60 @@
                 }
             });
         }
+        // =====================================================
+        // 🎬 MOVIE RESULTS CARD FILTERING
+        // =====================================================
+        let activeMovieFilter = null;
+
+        const movieFilterCards =
+            document.querySelectorAll(".movie-filter-card");
+
+        const movieRows =
+            document.querySelectorAll(".movie-results-row");
+
+        const movieFilterStatus =
+            document.getElementById("movieFilterStatus");
+
+        movieFilterCards.forEach(function (card) {
+            card.addEventListener("click", function () {
+                const selectedFilter = card.dataset.movieFilter;
+
+                activeMovieFilter =
+                    activeMovieFilter === selectedFilter
+                        ? null
+                        : selectedFilter;
+
+                movieFilterCards.forEach(function (candidate) {
+                    const isActive =
+                        candidate.dataset.movieFilter === activeMovieFilter;
+                    candidate.classList.toggle("border-primary", isActive);
+                    candidate.classList.toggle("shadow", isActive);
+                    candidate.setAttribute("aria-pressed", isActive.toString());
+                });
+
+                let visibleCount = 0;
+
+                movieRows.forEach(function (row) {
+                    const isVisible =
+                        activeMovieFilter === null ||
+                        row.dataset.movieCategory === activeMovieFilter;
+                    row.hidden = !isVisible;
+
+                    if (isVisible) {
+                        visibleCount++;
+                    }
+                });
+
+                if (movieFilterStatus) {
+                    movieFilterStatus.textContent =
+                        activeMovieFilter === null
+                            ? "Showing all movie results."
+                            : `Showing ${visibleCount} movie result(s). ` +
+                              "Select the active card again to clear the filter.";
+                }
+            });
+        });
+
         // =====================================================
         // 🧪 DRY RUN PREVIEW CARD FILTERING
         // =====================================================
