@@ -68,11 +68,24 @@ namespace PIM.Web.Pages
                 missing.Add("OMDb API key (Omdb:ApiKey) — needed to identify movies.");
 
             // Plex:BaseUrl is optional (defaults to http://localhost:32400).
-            if (string.IsNullOrWhiteSpace(config["Plex:Token"]))
+            // The token is only required while the Plex check is on; when the
+            // owner explicitly turns it off, PlexCheckDisabled warns instead.
+            if (PlexSettings.IsLibraryCheckEnabled(config[PlexSettings.EnabledKey]) &&
+                string.IsNullOrWhiteSpace(config["Plex:Token"]))
+            {
                 missing.Add("Plex token (Plex:Token) — needed to check your existing library.");
+            }
 
             return missing;
         }
+
+        /// <summary>
+        /// True only when Plex:Enabled is explicitly false. Moves are then
+        /// approved without checking whether the movie is already in Plex, so
+        /// the page must say so.
+        /// </summary>
+        public bool PlexCheckDisabled =>
+            !PlexSettings.IsLibraryCheckEnabled(_config[PlexSettings.EnabledKey]);
 
         public IndexModel(
             IFileScanner scanner,
