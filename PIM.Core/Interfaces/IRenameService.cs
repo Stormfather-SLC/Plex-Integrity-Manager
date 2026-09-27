@@ -5,6 +5,12 @@ namespace PIM.Core.Interfaces
     public interface IRenameService
     {
         /// <summary>
+        /// Operation journal file written by the most recent dry run or live
+        /// commit, or null when none was written.
+        /// </summary>
+        string? LastJournalLocation { get; }
+
+        /// <summary>
         /// Generates proposed target paths using the selected destination
         /// profile and its ordered organization levels.
         /// </summary>

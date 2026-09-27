@@ -461,7 +461,10 @@ namespace PIM.Web.Pages
                     $"{summary.MoveCount} files processed, " +
                     $"{summary.DuplicateSkipCount} duplicates skipped, " +
                     $"{summary.ReviewCount} need review, " +
-                    $"{summary.ErrorCount} errors found.";
+                    $"{summary.ErrorCount} errors found." +
+                    (string.IsNullOrWhiteSpace(_rename.LastJournalLocation)
+                        ? string.Empty
+                        : $" A record of every file operation was saved to {_rename.LastJournalLocation}.");
             }
 
             return RedirectToPage(new
