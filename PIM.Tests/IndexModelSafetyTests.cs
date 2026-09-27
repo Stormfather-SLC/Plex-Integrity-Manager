@@ -491,6 +491,81 @@ public sealed class IndexModelSafetyTests
             SearchOption.AllDirectories));
     }
 
+    [Fact]
+    public async Task SetImdbId_InvalidatesAnEarlierDryRunApprovalAndPassesTheNormalizedId()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        movie.ImdbId = null;
+        movie.ApprovedForCommit = false;
+        movie.SetMetadataReview(
+            "IMDb ID could not be determined",
+            MetadataLookupFailureType.MovieNotFound);
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var dryRun = CreateModel(store, configuration, profile);
+        dryRun.DryRun = true;
+        await dryRun.OnPostCommitAsync();
+        Assert.NotNull(store.GetDryRunApproval());
+
+        var suggestion = new NoOpSuggestionService();
+        await CreateModel(store, configuration, profile, suggestion: suggestion)
+            .OnPostSetImdbIdAsync(movie.Id, "https://www.imdb.com/title/TT0088794/");
+
+        Assert.Null(store.GetDryRunApproval());
+        Assert.Equal(new[] { "tt0088794" }, suggestion.AppliedImdbIds);
+        var rename = new RecordingRenameService();
+        var live = CreateModel(store, configuration, profile, rename: rename);
+        live.DryRun = false;
+        await live.OnPostCommitAsync();
+        Assert.Equal(0, rename.ExecuteCount);
+    }
+
+    [Theory]
+    [InlineData("not an imdb id")]
+    [InlineData("")]
+    public async Task SetImdbId_InvalidInput_ChangesNothing(string input)
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        movie.ImdbId = null;
+        movie.SetMetadataReview(
+            "IMDb ID could not be determined",
+            MetadataLookupFailureType.MovieNotFound);
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var suggestion = new NoOpSuggestionService();
+        var model = CreateModel(store, configuration, profile, suggestion: suggestion);
+
+        await model.OnPostSetImdbIdAsync(movie.Id, input);
+
+        Assert.Empty(suggestion.AppliedImdbIds);
+        Assert.Null(movie.ImdbId);
+        Assert.Contains("Nothing was changed", model.TempData["Message"]?.ToString());
+    }
+
+    [Fact]
+    public async Task SetImdbId_ForAnAlreadyIdentifiedMovie_ChangesNothing()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var suggestion = new NoOpSuggestionService();
+        var model = CreateModel(store, configuration, profile, suggestion: suggestion);
+
+        await model.OnPostSetImdbIdAsync(movie.Id, "tt0088794");
+
+        Assert.Empty(suggestion.AppliedImdbIds);
+        Assert.Equal("tt1234567", movie.ImdbId);
+    }
+
     private static Movie CreateIdentifiedFileMovie(string file)
     {
         return new Movie
@@ -564,7 +639,8 @@ public sealed class IndexModelSafetyTests
         DestinationProfile profile,
         CountingMetadataService? metadata = null,
         IRenameService? rename = null,
-        IMoviePlanService? plan = null)
+        IMoviePlanService? plan = null,
+        IMetadataSuggestionService? suggestion = null)
     {
         metadata ??= new CountingMetadataService();
         rename ??= new RecordingRenameService();
@@ -581,7 +657,7 @@ public sealed class IndexModelSafetyTests
             new DryRunPreviewService(),
             new FixedProfileStore(profile),
             plan,
-            new NoOpSuggestionService(),
+            suggestion ?? new NoOpSuggestionService(),
             new DuplicateService(),
             NullLogger<IndexModel>.Instance);
         var httpContext = new DefaultHttpContext();
@@ -745,6 +821,8 @@ public sealed class IndexModelSafetyTests
 
     private sealed class NoOpSuggestionService : IMetadataSuggestionService
     {
+        public List<string> AppliedImdbIds { get; } = new();
+
         public Task<bool> AcceptAsync(
             Movie movie,
             List<Movie> allMovies,
@@ -753,6 +831,19 @@ public sealed class IndexModelSafetyTests
             LibraryGoal libraryGoal)
         {
             return Task.FromResult(false);
+        }
+
+        public Task<bool> ApplyImdbIdAsync(
+            Movie movie,
+            string imdbId,
+            List<Movie> allMovies,
+            DestinationProfile profile,
+            string sourceRoot,
+            LibraryGoal libraryGoal)
+        {
+            AppliedImdbIds.Add(imdbId);
+            movie.ImdbId = imdbId;
+            return Task.FromResult(true);
         }
     }
 

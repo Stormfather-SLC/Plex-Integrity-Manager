@@ -878,6 +878,31 @@
                                                     }
                                                 </div>
                                             }
+                                            @if (movie.CanEnterImdbId)
+                                            {
+                                                <form method="post" asp-page-handler="SetImdbId" class="mt-2 p-2 bg-light border rounded">
+                                                    @Html.AntiForgeryToken()
+                                                    <input type="hidden" name="movieId" value="@movie.Id" />
+                                                    <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
+                                                    <label class="form-label mb-1" for="imdb-@movie.Id">
+                                                        @(movie.HasMetadataSuggestion ? "Not the right movie? Enter its IMDb ID:" : "Know the movie? Enter its IMDb ID:")
+                                                    </label>
+                                                    <div class="input-group input-group-sm">
+                                                        <input type="text"
+                                                               class="form-control"
+                                                               id="imdb-@movie.Id"
+                                                               name="imdbId"
+                                                               placeholder="tt0088794 or IMDb page link"
+                                                               maxlength="500"
+                                                               autocomplete="off"
+                                                               required />
+                                                        <button type="submit" class="btn btn-outline-primary">Look Up</button>
+                                                    </div>
+                                                    <div class="form-text">
+                                                        PIM checks the ID with OMDb. If it doesn't match this file's title or year, you'll be asked to confirm the movie it points to.
+                                                    </div>
+                                                </form>
+                                            }
                                         </div>
                                     }
 

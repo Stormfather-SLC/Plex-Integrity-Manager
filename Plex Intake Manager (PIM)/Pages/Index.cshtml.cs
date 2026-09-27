@@ -334,6 +334,72 @@ namespace PIM.Web.Pages
             });
         }
 
+        public async Task<IActionResult> OnPostSetImdbIdAsync(Guid movieId, string? imdbId)
+        {
+            InvalidateDryRunApproval();
+
+            if (!TryGetCachedMovies(out var movies))
+            {
+                TempData["Message"] = "The scan is no longer available. Scan the source folder again.";
+                return RedirectToPage();
+            }
+
+            var movie = movies.SingleOrDefault(candidate => candidate.Id == movieId);
+
+            if (!ImdbIdInput.TryNormalize(imdbId, out var normalizedImdbId))
+            {
+                TempData["Message"] =
+                    "Enter one IMDb ID such as tt0088794, or paste the movie's IMDb page address. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            if (movie == null || !movie.CanEnterImdbId)
+            {
+                TempData["Message"] =
+                    "That movie no longer needs an IMDb ID. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            _logger.LogInformation(
+                "User supplied IMDb ID {ImdbId} for {FileName}; invalidating prior dry-run approval, validating the ID with OMDb, and rebuilding the plan.",
+                normalizedImdbId,
+                movie.FileName ?? "<unknown>");
+
+            var applied = await _metadataSuggestion.ApplyImdbIdAsync(
+                movie,
+                normalizedImdbId,
+                movies,
+                _profileStore.GetActiveProfile(),
+                _config["PIM:ScanPath"] ?? string.Empty,
+                GetConfiguredLibraryGoal());
+
+            if (!applied)
+            {
+                TempData["Message"] = "The IMDb ID could not be applied. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            SetCachedMovies(movies);
+
+            TempData["Message"] = movie.NeedsReview || movie.HasError
+                ? $"{normalizedImdbId} was looked up for '{movie.FileName}', but the item still needs review: {movie.ReviewReason ?? movie.ErrorMessage ?? movie.Status}."
+                : $"{normalizedImdbId} identified '{movie.FileName}' as {movie.Title} ({movie.Year}). Run a new dry run before live commit.";
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
+        }
+
         public IActionResult OnPostKeepDuplicateCopy(Guid movieId)
         {
             InvalidateDryRunApproval();
