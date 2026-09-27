@@ -58,6 +58,26 @@ namespace PIM.Web.Pages
 
         public DestinationProfile ActiveDestinationProfile { get; set; } = new();
 
+        /// <summary>
+        /// Required integrations that are not configured. Items that depend on
+        /// them fail closed, so the page explains why nothing is approved.
+        /// </summary>
+        public IReadOnlyList<string> MissingSetupItems => GetMissingSetupItems(_config);
+
+        public static IReadOnlyList<string> GetMissingSetupItems(IConfiguration config)
+        {
+            var missing = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(config["Omdb:ApiKey"]))
+                missing.Add("OMDb API key (Omdb:ApiKey) — needed to identify movies.");
+
+            // Plex:BaseUrl is optional (defaults to http://localhost:32400).
+            if (string.IsNullOrWhiteSpace(config["Plex:Token"]))
+                missing.Add("Plex token (Plex:Token) — needed to check your existing library.");
+
+            return missing;
+        }
+
         public IndexModel(
             IFileScanner scanner,
             IFileNameParser parser,

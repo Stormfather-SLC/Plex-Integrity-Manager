@@ -30,17 +30,12 @@ namespace PIM.Infrastructure.Metadata
             _httpClient = httpClient;
             _logger = logger ?? NullLogger<OmdbMetadataService>.Instance;
 
-            _apiKey = configuration["Omdb:ApiKey"]?.Trim()
-                ?? throw new InvalidOperationException(
-                    "The OMDb API key is not configured. " +
-                    "Set the 'Omdb:ApiKey' user secret.");
-
-            if (string.IsNullOrWhiteSpace(_apiKey))
-            {
-                throw new InvalidOperationException(
-                    "The configured OMDb API key is empty.");
-            }
+            // A missing key must not crash every page that resolves this service.
+            // Lookups fail closed per movie instead (see EnrichAsync).
+            _apiKey = configuration["Omdb:ApiKey"]?.Trim() ?? string.Empty;
         }
+
+        public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey);
 
         public async Task EnrichAsync(Movie movie)
         {
@@ -58,6 +53,16 @@ namespace PIM.Infrastructure.Metadata
             var parsedYear = movie.Year;
             var originalImdbId = movie.ImdbId;
             var hasImdbId = !string.IsNullOrWhiteSpace(originalImdbId);
+
+            if (!IsConfigured)
+            {
+                MarkLookupFailure(
+                    movie,
+                    MetadataLookupFailureType.InvalidApiKey,
+                    "The OMDb API key is not configured.",
+                    "OMDb lookup not attempted: the OMDb API key is not configured");
+                return;
+            }
 
             if (!hasImdbId && string.IsNullOrWhiteSpace(parsedTitle))
             {
@@ -1421,8 +1426,9 @@ namespace PIM.Infrastructure.Metadata
             if (string.IsNullOrWhiteSpace(value))
                 return null;
 
-            var sanitized = value
-                .Replace(_apiKey, "[redacted]", StringComparison.Ordinal)
+            var sanitized = (IsConfigured
+                    ? value.Replace(_apiKey, "[redacted]", StringComparison.Ordinal)
+                    : value)
                 .Replace('\r', ' ')
                 .Replace('\n', ' ')
                 .Trim();

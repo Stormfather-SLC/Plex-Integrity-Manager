@@ -15,6 +15,20 @@
     Do not run this against your primary Plex library yet.
 </div>
 
+@if (Model.MissingSetupItems.Count > 0)
+{
+    <div class="alert alert-danger mt-3" id="setupRequiredAlert">
+        <strong>Setup required:</strong>
+        PIM will not approve any file moves until the following are configured:
+        <ul class="mb-0">
+            @foreach (var item in Model.MissingSetupItems)
+            {
+                <li>@item</li>
+            }
+        </ul>
+    </div>
+}
+
 @if (TempData["Message"] != null)
 {
     <div class="alert alert-info mt-3">

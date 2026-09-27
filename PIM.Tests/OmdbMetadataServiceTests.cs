@@ -1497,6 +1497,40 @@ public sealed class OmdbMetadataServiceTests
         Assert.Equal(2010, movie.Year);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task EnrichAsync_MissingApiKey_FailsClosedWithoutCallingOmdb(string? apiKey)
+    {
+        var handler = new StubHttpMessageHandler(Array.Empty<HttpResponseMessage>());
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Omdb:ApiKey"] = apiKey
+            })
+            .Build();
+
+        // Constructing the service must not throw; a missing key previously
+        // crashed every page that resolved IMetadataService.
+        var service = new OmdbMetadataService(new HttpClient(handler), configuration);
+        var movie = new Movie
+        {
+            FileName = "The.Matrix.1999.1080p.mkv",
+            Title = "The Matrix",
+            Year = 1999
+        };
+
+        await service.EnrichAsync(movie);
+
+        Assert.False(service.IsConfigured);
+        Assert.Empty(handler.RequestUris);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.False(movie.MetadataFetched);
+        Assert.Contains("API key is not configured", movie.ReviewReason);
+    }
+
     private static OmdbMetadataService CreateService(
         HttpMessageHandler handler,
         string apiKey = "test-key")
