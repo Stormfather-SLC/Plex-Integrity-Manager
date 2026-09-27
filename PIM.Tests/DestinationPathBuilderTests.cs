@@ -137,6 +137,64 @@ public sealed class DestinationPathBuilderTests
     }
 
     [Fact]
+    public void Build_PreserveSourceFolders_OmitsDoubleNestedExistingMovieFolders()
+    {
+        // Regression: a source already nested as R\Movie\Movie\file previously
+        // stripped only one trailing movie folder and produced R\Movie\Movie\.
+        var sourceRoot = CreateSourceRoot();
+        var movie = CreateMovie();
+        movie.MpaRating = "R";
+
+        var movieFolder = movie.GetNormalizedFolderName();
+        var sourceFileName = movie.FileName
+            ?? throw new InvalidOperationException("The test movie file name is required.");
+        var sourceDirectory = Path.Combine(sourceRoot, "R", movieFolder, movieFolder);
+        movie.DirectoryPath = sourceDirectory;
+        movie.OriginalFilePath = Path.Combine(sourceDirectory, sourceFileName);
+
+        var profile = CreateProfile(
+            OrganizationLevelType.PreserveSourceFolders);
+
+        var result = _builder.Build(movie, profile, sourceRoot, ".mp4");
+
+        Assert.Equal(new[] { "R" }, result.OrganizationSegments);
+        Assert.Equal(
+            Path.Combine(
+                Path.GetFullPath(profile.DestinationRoot),
+                "R",
+                movieFolder,
+                movie.GetNormalizedFileName(".mp4")),
+            result.FullFilePath);
+    }
+
+    [Fact]
+    public void Build_PreserveSourceFolders_DoubleNestedMovieFolderAtRoot_UsesNoOrganizationFolders()
+    {
+        var sourceRoot = CreateSourceRoot();
+        var movie = CreateMovie();
+
+        var movieFolder = movie.GetNormalizedFolderName();
+        var sourceFileName = movie.FileName
+            ?? throw new InvalidOperationException("The test movie file name is required.");
+        var sourceDirectory = Path.Combine(sourceRoot, movieFolder, movieFolder);
+        movie.DirectoryPath = sourceDirectory;
+        movie.OriginalFilePath = Path.Combine(sourceDirectory, sourceFileName);
+
+        var profile = CreateProfile(
+            OrganizationLevelType.PreserveSourceFolders);
+
+        var result = _builder.Build(movie, profile, sourceRoot, ".mp4");
+
+        Assert.Empty(result.OrganizationSegments);
+        Assert.Equal(
+            Path.Combine(
+                Path.GetFullPath(profile.DestinationRoot),
+                movieFolder,
+                movie.GetNormalizedFileName(".mp4")),
+            result.FullFilePath);
+    }
+
+    [Fact]
     public void Build_RatingThenPreserveSourceFolders_CollapsesAdjacentDuplicateFolder()
     {
         var sourceRoot = CreateSourceRoot();

@@ -277,8 +277,10 @@ public sealed class DestinationPathBuilder : IDestinationPathBuilder
 
         // Preserve source organization folders, not the movie container itself.
         // The normalized movie folder is always appended by Build(), so keeping
-        // an existing Plex movie folder here would produce Movie\Movie.
-        if (segments.Count > 0 && IsExistingMovieFolder(movie, segments[^1]))
+        // an existing Plex movie folder here would produce Movie\Movie. Strip
+        // every trailing movie folder so an already double-nested source
+        // (Movie\Movie\file) is normalized instead of reproducing the nesting.
+        while (segments.Count > 0 && IsExistingMovieFolder(movie, segments[^1]))
             segments.RemoveAt(segments.Count - 1);
 
         return segments;
