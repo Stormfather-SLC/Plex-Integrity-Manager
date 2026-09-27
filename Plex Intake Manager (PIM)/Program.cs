@@ -30,7 +30,6 @@ builder.Configuration.AddJsonFile(
     reloadOnChange: true);
 
 builder.Services.AddRazorPages();
-builder.Services.AddMemoryCache();
 
 builder.Services.AddScoped<IFileScanner, FileScanner>();
 builder.Services.AddScoped<IFileNameParser, FileNameParser>();
@@ -49,6 +48,9 @@ builder.Services.AddScoped<IMoviePlanService, MoviePlanService>();
 builder.Services.AddScoped<IMetadataSuggestionService, MetadataSuggestionService>();
 
 builder.Services.AddSingleton<IDestinationProfileStore, DestinationProfileStore>();
+// Scans, review decisions, and dry-run approvals survive restarts. Singleton so
+// every request and the background scan share one in-memory copy.
+builder.Services.AddSingleton<IWorkflowStateStore, JsonWorkflowStateStore>();
 builder.Services.AddSingleton<ScanProgress>();
 builder.Services.AddSingleton<SourceCleanupStatus>();
 builder.Services.AddScoped<PreviewTreeService>();

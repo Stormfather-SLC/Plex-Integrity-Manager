@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using Microsoft.Extensions.Caching.Memory;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 using PIM.Web.Models;
@@ -14,10 +13,6 @@ namespace PIM.Web.Pages
     /// </summary>
     public class IndexModel : PageModel
     {
-        private const string MovieScanCacheKey = "MovieScan";
-        private const string DryRunPreviewCacheKey = "DryRunPreview";
-        private const string DryRunApprovalCacheKey = "DryRunApproval";
-        private const int CacheDurationMinutes = 30;
         private const int DefaultMetadataDelayMs = 250;
 
         private readonly IFileScanner _scanner;
@@ -25,7 +20,7 @@ namespace PIM.Web.Pages
         private readonly IMetadataService _metadata;
         private readonly IRenameService _rename;
         private readonly IConfiguration _config;
-        private readonly IMemoryCache _cache;
+        private readonly IWorkflowStateStore _workflowState;
         private readonly ScanProgress _progress;
         private readonly PreviewTreeService _treeService;
         private readonly IDryRunPreviewService _dryRunPreviewService;
@@ -84,7 +79,7 @@ namespace PIM.Web.Pages
             IMetadataService metadata,
             IRenameService rename,
             IConfiguration config,
-            IMemoryCache cache,
+            IWorkflowStateStore workflowState,
             ScanProgress progress,
             PreviewTreeService treeService,
             IDryRunPreviewService dryRunPreviewService,
@@ -98,7 +93,7 @@ namespace PIM.Web.Pages
             _metadata = metadata;
             _rename = rename;
             _config = config;
-            _cache = cache;
+            _workflowState = workflowState;
             _progress = progress;
             _treeService = treeService;
             _dryRunPreviewService = dryRunPreviewService;
@@ -185,7 +180,7 @@ namespace PIM.Web.Pages
                         _progress.Processed++;
                     }
 
-                    SetCachedMovies(movies);
+                    _workflowState.SaveMovies(movies, rootPath);
                     _logger.LogInformation(
                         "Movie scan completed with {MovieCount} discovered movie file(s).",
                         movies.Count);
@@ -429,19 +424,14 @@ namespace PIM.Web.Pages
                 DryRunPreview = _dryRunPreviewService.BuildPreview(
                     movies,
                     libraryGoal);
-                _cache.Set(
-                    DryRunPreviewCacheKey,
+                _workflowState.SaveDryRun(
                     DryRunPreview,
-                    TimeSpan.FromMinutes(CacheDurationMinutes));
-                _cache.Set(
-                    DryRunApprovalCacheKey,
                     new DryRunApproval(
                         profile.Id,
                         profile.Revision,
                         libraryGoal,
                         currentPlanFingerprint,
-                        DateTime.UtcNow),
-                    TimeSpan.FromMinutes(CacheDurationMinutes));
+                        DateTime.UtcNow));
 
                 TempData["Message"] =
                     $"Dry Run Complete using '{profile.Name}': " +
@@ -550,7 +540,7 @@ namespace PIM.Web.Pages
 
                 if (settingsChange.ClearScan)
                 {
-                    _cache.Remove(MovieScanCacheKey);
+                    _workflowState.ClearMovies();
                     ResetProgress();
                 }
                 else if (settingsChange.RebuildExistingPlan &&
@@ -651,35 +641,19 @@ namespace PIM.Web.Pages
 
         private void LoadCachedDryRunPreview()
         {
-            if (_cache.TryGetValue(
-                    DryRunPreviewCacheKey,
-                    out DryRunPreviewResult? dryRunPreview))
-            {
-                DryRunPreview = dryRunPreview;
-            }
+            DryRunPreview = _workflowState.GetDryRunPreview();
         }
 
         private bool TryGetCachedMovies(out List<Movie> movies)
         {
-            if (_cache.TryGetValue(
-                    MovieScanCacheKey,
-                    out List<Movie>? cachedMovies) &&
-                cachedMovies != null)
-            {
-                movies = cachedMovies;
-                return true;
-            }
-
-            movies = new List<Movie>();
-            return false;
+            return _workflowState.TryGetMovies(out movies);
         }
 
         private void SetCachedMovies(List<Movie> movies)
         {
-            _cache.Set(
-                MovieScanCacheKey,
+            _workflowState.SaveMovies(
                 movies,
-                TimeSpan.FromMinutes(CacheDurationMinutes));
+                _config["PIM:ScanPath"] ?? string.Empty);
         }
 
         private static List<Movie> GetMoviesRequiringMetadata(
@@ -771,10 +745,9 @@ namespace PIM.Web.Pages
             string currentPlanFingerprint,
             LibraryGoal libraryGoal)
         {
-            return _cache.TryGetValue(
-                   DryRunApprovalCacheKey,
-                   out DryRunApproval? approval) &&
-                   approval != null &&
+            var approval = _workflowState.GetDryRunApproval();
+
+            return approval != null &&
                    approval.Matches(
                        profile,
                        libraryGoal,
@@ -783,8 +756,7 @@ namespace PIM.Web.Pages
 
         private void InvalidateDryRunApproval()
         {
-            _cache.Remove(DryRunPreviewCacheKey);
-            _cache.Remove(DryRunApprovalCacheKey);
+            _workflowState.InvalidateDryRunApproval();
         }
 
         private LibraryGoal GetConfiguredLibraryGoal()

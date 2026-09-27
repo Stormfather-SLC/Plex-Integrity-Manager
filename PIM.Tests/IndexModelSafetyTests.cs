@@ -1,11 +1,11 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
+using PIM.Infrastructure.Services;
 using PIM.Web.Pages;
 using PIM.Web.Services;
 using Xunit;
@@ -14,20 +14,20 @@ namespace PIM.Tests;
 
 public sealed class IndexModelSafetyTests
 {
-    private const string MovieScanCacheKey = "MovieScan";
-
     [Fact]
     public async Task LiveCommitWithoutMatchingDryRun_IsRejectedBeforeRenameService()
     {
-        using var cache = new MemoryCache(new MemoryCacheOptions());
-        var profile = CreateProfile();
-        var movie = CreateMovie(profile, LibraryGoal.OrganizeNewMovies);
-        cache.Set(MovieScanCacheKey, new List<Movie> { movie });
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
         var rename = new RecordingRenameService();
         var model = CreateModel(
-            cache,
+            store,
+            configuration,
             profile,
-            LibraryGoal.OrganizeNewMovies,
             rename: rename);
         model.DryRun = false;
 
@@ -42,18 +42,20 @@ public sealed class IndexModelSafetyTests
     [Fact]
     public async Task ProfileChange_RebuildsTargetWithoutMetadataCall()
     {
-        using var cache = new MemoryCache(new MemoryCacheOptions());
-        var oldProfile = CreateProfile();
-        var currentProfile = CreateProfile();
-        var movie = CreateMovie(oldProfile, LibraryGoal.OrganizeNewMovies);
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var oldProfile = CreateProfile(workspace);
+        var currentProfile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, oldProfile, LibraryGoal.OrganizeNewMovies);
         var originalTarget = movie.TargetPath;
-        cache.Set(MovieScanCacheKey, new List<Movie> { movie });
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
         var metadata = new CountingMetadataService();
         var plan = new RecordingPlanService();
         var model = CreateModel(
-            cache,
+            store,
+            configuration,
             currentProfile,
-            LibraryGoal.OrganizeNewMovies,
             metadata: metadata,
             plan: plan);
 
@@ -71,16 +73,18 @@ public sealed class IndexModelSafetyTests
     [Fact]
     public async Task WorkflowChange_RecalculatesPlanWithoutMetadataCall()
     {
-        using var cache = new MemoryCache(new MemoryCacheOptions());
-        var profile = CreateProfile();
-        var movie = CreateMovie(profile, LibraryGoal.OrganizeNewMovies);
-        cache.Set(MovieScanCacheKey, new List<Movie> { movie });
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.ReorganizationMigration);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
         var metadata = new CountingMetadataService();
         var plan = new RecordingPlanService();
         var model = CreateModel(
-            cache,
+            store,
+            configuration,
             profile,
-            LibraryGoal.ReorganizationMigration,
             metadata: metadata,
             plan: plan);
 
@@ -93,35 +97,277 @@ public sealed class IndexModelSafetyTests
             movie.PlannedLibraryGoal);
     }
 
-    private static IndexModel CreateModel(
-        IMemoryCache cache,
-        DestinationProfile profile,
+    [Fact]
+    public async Task Restart_ScanAndDryRunPreviewAreShownWithoutRescanOrMetadataCalls()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        var firstStore = CreateStore(configuration);
+        firstStore.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var beforeRestart = CreateModel(firstStore, configuration, profile);
+        beforeRestart.DryRun = true;
+        await beforeRestart.OnPostCommitAsync();
+
+        var metadata = new CountingMetadataService();
+        var afterRestart = CreateModel(
+            CreateStore(configuration),
+            configuration,
+            profile,
+            metadata: metadata);
+        await afterRestart.OnGetAsync();
+
+        var restored = Assert.Single(afterRestart.Movies);
+        Assert.Equal(movie.Id, restored.Id);
+        Assert.Equal(movie.TargetPath, restored.TargetPath);
+        Assert.NotNull(afterRestart.DryRunPreview);
+        Assert.Equal(0, metadata.CallCount);
+    }
+
+    [Fact]
+    public async Task Restart_LiveCommitAcceptsDryRunApprovedBeforeRestart()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var profile = CreateProfile(workspace);
+        var firstStore = CreateStore(configuration);
+        firstStore.SaveMovies(
+            new List<Movie>
+            {
+                CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies)
+            },
+            workspace.SourceRoot);
+        var dryRunRename = new RecordingRenameService();
+        var beforeRestart = CreateModel(
+            firstStore,
+            configuration,
+            profile,
+            rename: dryRunRename);
+        beforeRestart.DryRun = true;
+        await beforeRestart.OnPostCommitAsync();
+
+        var liveRename = new RecordingRenameService();
+        var afterRestart = CreateModel(
+            CreateStore(configuration),
+            configuration,
+            profile,
+            rename: liveRename);
+        afterRestart.DryRun = false;
+        await afterRestart.OnPostCommitAsync();
+
+        Assert.Equal(new[] { true }, dryRunRename.DryRunFlags);
+        Assert.Equal(new[] { false }, liveRename.DryRunFlags);
+    }
+
+    [Fact]
+    public async Task Restart_LiveCommitRejectedWhenPlanChangedSinceDryRun()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var profile = CreateProfile(workspace);
+        var firstStore = CreateStore(configuration);
+        firstStore.SaveMovies(
+            new List<Movie>
+            {
+                CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies)
+            },
+            workspace.SourceRoot);
+        var beforeRestart = CreateModel(firstStore, configuration, profile);
+        beforeRestart.DryRun = true;
+        await beforeRestart.OnPostCommitAsync();
+
+        // The plan rebuilt after restart now requires review (for example, a
+        // Plex title that appeared while PIM was stopped).
+        var liveRename = new RecordingRenameService();
+        var afterRestart = CreateModel(
+            CreateStore(configuration),
+            configuration,
+            profile,
+            rename: liveRename,
+            plan: new RecordingPlanService(
+                movie => movie.RequireReview("Plex library already contains this movie")));
+        afterRestart.DryRun = false;
+        await afterRestart.OnPostCommitAsync();
+
+        Assert.Equal(0, liveRename.ExecuteCount);
+        Assert.Contains(
+            "does not have a matching dry-run approval",
+            afterRestart.TempData["Message"]?.ToString());
+    }
+
+    [Fact]
+    public async Task Restart_LiveCommitRejectedWhenDryRunApprovalHasExpired()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var profile = CreateProfile(workspace);
+        var firstStore = CreateStore(configuration, clock);
+        firstStore.SaveMovies(
+            new List<Movie>
+            {
+                CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies)
+            },
+            workspace.SourceRoot);
+        var beforeRestart = CreateModel(firstStore, configuration, profile);
+        beforeRestart.DryRun = true;
+        await beforeRestart.OnPostCommitAsync();
+
+        clock.Advance(DryRunApproval.MaxAge + TimeSpan.FromMinutes(1));
+        var liveRename = new RecordingRenameService();
+        var afterRestart = CreateModel(
+            CreateStore(configuration, clock),
+            configuration,
+            profile,
+            rename: liveRename);
+        afterRestart.DryRun = false;
+        await afterRestart.OnPostCommitAsync();
+
+        Assert.Equal(0, liveRename.ExecuteCount);
+    }
+
+    [Fact]
+    public async Task Restart_RealFiles_DryRunMovesNothingAndApprovedLiveCommitMovesAfterRestart()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Restart-Files");
+        var sourceFile = Path.Combine(
+            workspace.SourceRoot,
+            "Restart Movie (2024)",
+            "Restart.Movie.2024.mkv");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceFile)!);
+        Directory.CreateDirectory(workspace.DestinationRoot);
+        File.WriteAllText(sourceFile, "movie");
+
+        var configuration = CreateConfiguration(
+            workspace,
+            LibraryGoal.OrganizeNewMovies,
+            removeEmptySourceFolders: false);
+        var profile = new DestinationProfile
+        {
+            Name = "Restart Profile",
+            DestinationRoot = workspace.DestinationRoot
+        };
+        var movie = new Movie
+        {
+            Title = "Restart Movie",
+            Year = 2024,
+            ImdbId = "tt7654321",
+            OriginalFilePath = sourceFile,
+            FileName = Path.GetFileName(sourceFile),
+            DirectoryPath = Path.GetDirectoryName(sourceFile),
+            FileSizeBytes = new FileInfo(sourceFile).Length,
+            MetadataFetched = true,
+            MatchConfidence = 100,
+            Status = "IMDb ID Match"
+        };
+
+        var firstStore = CreateStore(configuration);
+        firstStore.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var (firstRename, firstPlan) = CreateRealServices(configuration);
+        var beforeRestart = CreateModel(
+            firstStore,
+            configuration,
+            profile,
+            rename: firstRename,
+            plan: firstPlan);
+        beforeRestart.DryRun = true;
+        await beforeRestart.OnPostCommitAsync();
+
+        var plannedTarget = Assert.Single(beforeRestart.DryRunPreview!.Items).TargetPath;
+        Assert.True(File.Exists(sourceFile));
+        Assert.False(File.Exists(plannedTarget));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.DestinationRoot));
+
+        var (secondRename, secondPlan) = CreateRealServices(configuration);
+        var afterRestart = CreateModel(
+            CreateStore(configuration),
+            configuration,
+            profile,
+            rename: secondRename,
+            plan: secondPlan);
+        afterRestart.DryRun = false;
+        await afterRestart.OnPostCommitAsync();
+
+        Assert.StartsWith("Changes Applied", afterRestart.TempData["Message"]?.ToString());
+        Assert.False(File.Exists(sourceFile));
+        Assert.True(File.Exists(plannedTarget));
+        Assert.StartsWith(
+            workspace.DestinationRoot,
+            plannedTarget,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static (IRenameService Rename, IMoviePlanService Plan) CreateRealServices(
+        IConfiguration configuration)
+    {
+        var progress = new ScanProgress();
+        var destination = new DestinationConflictService(progress);
+        var rename = new RenameService(
+            destination,
+            new DestinationPathBuilder(),
+            configuration,
+            progress,
+            new SourceCleanupStatus());
+        var conflicts = new MovieConflictDetectionService(
+            destination,
+            new NoPlexConflictService());
+        var plan = new MoviePlanService(
+            new DuplicateService(),
+            rename,
+            conflicts);
+
+        return (rename, plan);
+    }
+
+    private static IConfiguration CreateConfiguration(
+        TempWorkspace workspace,
         LibraryGoal workflow,
+        bool removeEmptySourceFolders = true)
+    {
+        return new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["PIM:ScanPath"] = workspace.SourceRoot,
+                ["PIM:LibraryGoal"] = workflow.ToString(),
+                ["PIM:MetadataDelayMs"] = "0",
+                ["PIM:RemoveEmptySourceFolders"] = removeEmptySourceFolders.ToString(),
+                ["PIM:WorkflowStateDirectory"] = workspace.StateDirectory
+            })
+            .Build();
+    }
+
+    private static JsonWorkflowStateStore CreateStore(
+        IConfiguration configuration,
+        TimeProvider? clock = null)
+    {
+        return new JsonWorkflowStateStore(
+            configuration,
+            NullLogger<JsonWorkflowStateStore>.Instance,
+            clock ?? TimeProvider.System);
+    }
+
+    private static IndexModel CreateModel(
+        IWorkflowStateStore store,
+        IConfiguration configuration,
+        DestinationProfile profile,
         CountingMetadataService? metadata = null,
-        RecordingRenameService? rename = null,
-        RecordingPlanService? plan = null)
+        IRenameService? rename = null,
+        IMoviePlanService? plan = null)
     {
         metadata ??= new CountingMetadataService();
         rename ??= new RecordingRenameService();
         plan ??= new RecordingPlanService();
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["PIM:ScanPath"] = Path.Combine(Path.GetTempPath(), "PIM-Source"),
-                ["PIM:LibraryGoal"] = workflow.ToString(),
-                ["PIM:MetadataDelayMs"] = "0"
-            })
-            .Build();
         var model = new IndexModel(
             new EmptyScanner(),
             new NoOpParser(),
             metadata,
             rename,
             configuration,
-            cache,
+            store,
             new ScanProgress(),
             new PreviewTreeService(),
-            new EmptyDryRunPreviewService(),
+            new DryRunPreviewService(),
             new FixedProfileStore(profile),
             plan,
             new NoOpSuggestionService(),
@@ -138,19 +384,19 @@ public sealed class IndexModelSafetyTests
         return model;
     }
 
-    private static DestinationProfile CreateProfile()
+    private static DestinationProfile CreateProfile(TempWorkspace workspace)
     {
         return new DestinationProfile
         {
             Name = "Test Profile",
             DestinationRoot = Path.Combine(
-                Path.GetTempPath(),
-                "PIM-Index-Tests",
-                Guid.NewGuid().ToString("N"))
+                workspace.Root,
+                "Destination-" + Guid.NewGuid().ToString("N"))
         };
     }
 
     private static Movie CreateMovie(
+        TempWorkspace workspace,
         DestinationProfile profile,
         LibraryGoal plannedWorkflow)
     {
@@ -160,8 +406,7 @@ public sealed class IndexModelSafetyTests
             Year = 2024,
             ImdbId = "tt1234567",
             OriginalFilePath = Path.Combine(
-                Path.GetTempPath(),
-                "PIM-Source",
+                workspace.SourceRoot,
                 "Handler.Movie.2024.mkv"),
             FileName = "Handler.Movie.2024.mkv",
             MetadataFetched = true,
@@ -189,6 +434,13 @@ public sealed class IndexModelSafetyTests
 
     private sealed class RecordingPlanService : IMoviePlanService
     {
+        private readonly Action<Movie>? _afterRebuild;
+
+        public RecordingPlanService(Action<Movie>? afterRebuild = null)
+        {
+            _afterRebuild = afterRebuild;
+        }
+
         public int CallCount { get; private set; }
 
         public void Rebuild(
@@ -207,13 +459,16 @@ public sealed class IndexModelSafetyTests
                 movie.DestinationProfileId = profile.Id;
                 movie.DestinationProfileRevision = profile.Revision;
                 movie.PlannedLibraryGoal = libraryGoal;
+                _afterRebuild?.Invoke(movie);
             }
         }
     }
 
     private sealed class RecordingRenameService : IRenameService
     {
-        public int ExecuteCount { get; private set; }
+        public List<bool> DryRunFlags { get; } = new();
+
+        public int ExecuteCount => DryRunFlags.Count;
 
         public string? LastJournalLocation => null;
 
@@ -229,8 +484,14 @@ public sealed class IndexModelSafetyTests
             bool dryRun,
             string destinationRoot)
         {
-            ExecuteCount++;
+            DryRunFlags.Add(dryRun);
         }
+    }
+
+    private sealed class NoPlexConflictService : IPlexLibraryConflictService
+    {
+        public PlexLibraryConflictResult Check(Movie movie) =>
+            PlexLibraryConflictResult.NoConflict();
     }
 
     private sealed class FixedProfileStore : IDestinationProfileStore
@@ -267,16 +528,6 @@ public sealed class IndexModelSafetyTests
     {
         public void Parse(Movie movie)
         {
-        }
-    }
-
-    private sealed class EmptyDryRunPreviewService : IDryRunPreviewService
-    {
-        public DryRunPreviewResult BuildPreview(
-            IEnumerable<Movie> movies,
-            LibraryGoal libraryGoal = LibraryGoal.OrganizeNewMovies)
-        {
-            return new DryRunPreviewResult { LibraryGoal = libraryGoal };
         }
     }
 
