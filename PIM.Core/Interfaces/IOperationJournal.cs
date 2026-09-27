@@ -13,10 +13,13 @@ public interface IOperationJournal
     /// Starts a new run and returns a handle used to record its events.
     /// Throws when the journal cannot be created.
     /// </summary>
+    /// <param name="itemCount">Approved items the run will act on.</param>
+    /// <param name="notApprovedCount">Scanned items recorded only as skipped.</param>
     IOperationJournalRun StartRun(
         bool dryRun,
         string destinationRoot,
-        int itemCount);
+        int itemCount,
+        int notApprovedCount = 0);
 }
 
 public interface IOperationJournalRun : IDisposable
@@ -25,10 +28,13 @@ public interface IOperationJournalRun : IDisposable
     string Location { get; }
 
     /// <summary>
-    /// Appends and flushes one entry to durable storage. Throws when the entry
-    /// could not be written.
+    /// Appends one entry. By default it is flushed to durable storage before
+    /// returning; pass <paramref name="flushToDisk"/> = false for purely
+    /// informational entries (such as the many "not approved" items of a large
+    /// scan), which are then made durable by the next flushed entry or when the
+    /// run is disposed. Throws when the entry could not be written.
     /// </summary>
-    void Record(OperationJournalEntry entry);
+    void Record(OperationJournalEntry entry, bool flushToDisk = true);
 }
 
 /// <summary>Used where no journal is configured (for example, unit tests).</summary>
@@ -39,7 +45,8 @@ public sealed class NullOperationJournal : IOperationJournal
     public IOperationJournalRun StartRun(
         bool dryRun,
         string destinationRoot,
-        int itemCount) => NullRun.Instance;
+        int itemCount,
+        int notApprovedCount = 0) => NullRun.Instance;
 
     private sealed class NullRun : IOperationJournalRun
     {
@@ -47,7 +54,7 @@ public sealed class NullOperationJournal : IOperationJournal
 
         public string Location => string.Empty;
 
-        public void Record(OperationJournalEntry entry)
+        public void Record(OperationJournalEntry entry, bool flushToDisk = true)
         {
         }
 

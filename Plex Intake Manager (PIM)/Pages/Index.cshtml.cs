@@ -585,10 +585,13 @@ namespace PIM.Web.Pages
                 });
             }
 
+            // Only approved movies can be acted on; the rest are passed purely
+            // so the operation journal records what was not done and why.
             _rename.ExecuteChanges(
                 approvedMovies,
                 DryRun,
-                profile.DestinationRoot);
+                profile.DestinationRoot,
+                movies.Except(approvedMovies).ToList());
 
             SetCachedMovies(movies);
             var summary = BuildCommitSummary(movies, approvedMovies);

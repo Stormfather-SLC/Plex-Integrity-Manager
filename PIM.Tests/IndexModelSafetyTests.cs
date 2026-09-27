@@ -619,6 +619,27 @@ public sealed class IndexModelSafetyTests
     }
 
     [Fact]
+    public async Task DryRun_PassesOnlyApprovedMoviesForAction_AndTheRestForTheJournal()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var approved = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        var review = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        review.ApprovedForCommit = false;
+        review.RequireReview("Plex library conflict: already in Plex");
+        store.SaveMovies(new List<Movie> { approved, review }, workspace.SourceRoot);
+        var rename = new RecordingRenameService();
+        var model = CreateModel(store, configuration, profile, rename: rename);
+        model.DryRun = true;
+
+        await model.OnPostCommitAsync();
+
+        Assert.Equal(new[] { (1, 1) }, rename.Calls);
+    }
+
+    [Fact]
     public async Task ConfirmFileName_InvalidatesAnEarlierDryRunApproval()
     {
         using var workspace = new TempWorkspace("PIM-Index-Tests");
@@ -923,12 +944,16 @@ public sealed class IndexModelSafetyTests
         {
         }
 
+        public List<(int Approved, int NotApproved)> Calls { get; } = new();
+
         public void ExecuteChanges(
             List<Movie> movies,
             bool dryRun,
-            string destinationRoot)
+            string destinationRoot,
+            IReadOnlyCollection<Movie>? notApproved = null)
         {
             DryRunFlags.Add(dryRun);
+            Calls.Add((movies.Count, notApproved?.Count ?? 0));
         }
     }
 

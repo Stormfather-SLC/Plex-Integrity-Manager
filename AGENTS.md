@@ -147,7 +147,11 @@ Follow this roadmap unless the user explicitly changes the priority:
 - Phase One work completed and confirmed by the owner on 2026-09-27 (the original `pim-phase-one-plan.md` is lost; this roadmap is now the plan of record):
   - PRs #14–#18: MVP trustworthiness fixes, cleanup, source-folder normalization, missing-credential startup, durable operation journal.
   - PR #19: scans, review decisions, and dry-run approvals persist across restarts.
-- Current priority: Needs Review visibility and behavior (roadmap item 3).
+- Needs Review visibility and behavior (roadmap item 3): COMPLETE for MVP, manual checks passed and confirmed by the owner on 2026-09-27.
+  - PRs #21–#24 and #28: problem items first with filter cards, Keep This Copy for duplicate ties, manual IMDb ID entry, stale-tie fix, Confirm File Name.
+  - Related safety fixes found along the way: #26 (Plex check can no longer be skipped silently), #27 (release tags stripped from parsed titles).
+- Roadmap items 4 (IMDb confidence) and 5 (OutputPath without re-enrichment) are not yet confirmed; much of their work landed in #14, #23, #25, and #27.
+- Current priority: Review execution safety and logging (roadmap item 6), started 2026-09-27 at the owner's direction.
 
 Update this status only when the user explicitly confirms that a roadmap milestone has been completed or reprioritized.
 
