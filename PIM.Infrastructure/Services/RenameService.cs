@@ -118,8 +118,12 @@ namespace PIM.Infrastructure.Services
         public void ExecuteChanges(
             List<Movie> movies,
             bool dryRun,
-            string destinationRoot)
+            string destinationRoot,
+            IReadOnlyCollection<Movie>? notApproved = null)
         {
+            movies ??= new List<Movie>();
+            notApproved ??= Array.Empty<Movie>();
+
             var removeEmptySourceFolders =
                 !dryRun &&
                 _configuration.GetValue(
@@ -130,7 +134,9 @@ namespace PIM.Infrastructure.Services
             // prevents the browser from displaying cleanup results from an older run.
             _sourceCleanupStatus.Reset(removeEmptySourceFolders);
 
-            if (movies == null || movies.Count == 0)
+            // A run with nothing approved is still journaled when there are
+            // scanned movies, so the record shows what was not done and why.
+            if (movies.Count == 0 && notApproved.Count == 0)
                 return;
 
             if (string.IsNullOrWhiteSpace(destinationRoot))
@@ -162,7 +168,8 @@ namespace PIM.Infrastructure.Services
                 journalRun = _journal.StartRun(
                     dryRun,
                     normalizedDestinationRoot,
-                    movies.Count);
+                    movies.Count,
+                    notApproved.Count);
                 LastJournalLocation = journalRun.Location;
             }
             catch (Exception ex)
@@ -195,11 +202,11 @@ namespace PIM.Infrastructure.Services
 
             // Informational entries (skips, conflicts) must never change the
             // outcome for a movie; the pre-move entry is the one that gates moves.
-            void RecordBestEffort(OperationJournalEntry entry)
+            void RecordBestEffort(OperationJournalEntry entry, bool flushToDisk = true)
             {
                 try
                 {
-                    journalRun.Record(entry);
+                    journalRun.Record(entry, flushToDisk);
                 }
                 catch (Exception ex)
                 {
@@ -212,6 +219,17 @@ namespace PIM.Infrastructure.Services
 
             try
             {
+                // Informational only: buffered, never mutated, never moved.
+                foreach (var excluded in notApproved)
+                {
+                    RecordBestEffort(
+                        OperationJournalEntry.ForMovie(
+                            OperationJournalEvent.Skipped,
+                            excluded,
+                            DescribeNotApproved(excluded)),
+                        flushToDisk: false);
+                }
+
                 foreach (var movie in movies)
                 {
                     if (journalFailed)
@@ -826,6 +844,27 @@ namespace PIM.Infrastructure.Services
             return !string.IsNullOrWhiteSpace(movie.Title) &&
                    movie.Year.HasValue &&
                    !string.IsNullOrWhiteSpace(movie.ImdbId);
+        }
+
+        /// <summary>
+        /// Plain-language reason a scanned movie was not part of the run.
+        /// </summary>
+        private static string DescribeNotApproved(Movie movie)
+        {
+            if (movie.HasError)
+                return $"Not moved: error - {movie.ErrorMessage}";
+
+            if (movie.NeedsReview)
+                return $"Not moved: needs review - {movie.ReviewReason ?? "review required before commit"}";
+
+            if (movie.IsDuplicate &&
+                !movie.KeepRecommended &&
+                !movie.IsAlternateVersion)
+            {
+                return "Not moved: duplicate copy not selected (left in place, not deleted)";
+            }
+
+            return "Not moved: not approved for commit";
         }
 
         private static void ClearTarget(Movie movie)

@@ -40,7 +40,8 @@ public sealed class JsonLinesOperationJournal : IOperationJournal
     public IOperationJournalRun StartRun(
         bool dryRun,
         string destinationRoot,
-        int itemCount)
+        int itemCount,
+        int notApprovedCount = 0)
     {
         System.IO.Directory.CreateDirectory(_directory);
 
@@ -57,7 +58,7 @@ public sealed class JsonLinesOperationJournal : IOperationJournal
                 OperationJournalEvent.RunStarted,
                 TargetPath: destinationRoot,
                 Status: dryRun ? "Dry Run" : "Live Commit",
-                Detail: $"{itemCount} approved item(s)")
+                Detail: $"{itemCount} approved item(s); {notApprovedCount} not approved")
             {
                 TimestampUtc = startedUtc
             });
@@ -87,16 +88,35 @@ public sealed class JsonLinesOperationJournal : IOperationJournal
 
         public string Location { get; }
 
-        public void Record(OperationJournalEntry entry)
+        public void Record(OperationJournalEntry entry, bool flushToDisk = true)
         {
             ArgumentNullException.ThrowIfNull(entry);
 
             var line = JsonSerializer.Serialize(entry, SerializerOptions) + "\n";
             var bytes = Encoding.UTF8.GetBytes(line);
             _stream.Write(bytes, 0, bytes.Length);
-            _stream.Flush(flushToDisk: true);
+
+            // A flushed entry also makes every earlier buffered entry durable.
+            if (flushToDisk)
+                _stream.Flush(flushToDisk: true);
         }
 
-        public void Dispose() => _stream.Dispose();
+        public void Dispose()
+        {
+            try
+            {
+                // Make buffered informational entries durable. Every entry that
+                // gates a move was already flushed when it was recorded.
+                _stream.Flush(flushToDisk: true);
+            }
+            catch (IOException)
+            {
+                // Must not turn a completed run into a failure.
+            }
+            finally
+            {
+                _stream.Dispose();
+            }
+        }
     }
 }

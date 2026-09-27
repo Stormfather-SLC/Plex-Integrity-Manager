@@ -117,6 +117,110 @@ public sealed class OperationJournalTests : IDisposable
         Assert.True(Directory.Exists(Path.GetDirectoryName(first.OriginalFilePath)));
     }
 
+    [Fact]
+    public void DryRun_RecordsEveryNotApprovedItemWithItsReason_AndChangesNothing()
+    {
+        var approved = CreateMovie("Better Off Dead", 1985, "tt0088794");
+        var review = CreateMovie("The Sure Thing", 1985, "tt0090103");
+        review.ApprovedForCommit = false;
+        review.RequireReview("Low confidence metadata match (60% confidence)");
+        review.Status = "Needs Review";
+        var error = CreateMovie("One Crazy Summer", 1986, "tt0091680");
+        error.ApprovedForCommit = false;
+        error.ErrorMessage = "The source file could not be read.";
+        error.Status = "Error";
+        var duplicate = CreateMovie("Say Anything", 1989, "tt0098258");
+        duplicate.ApprovedForCommit = false;
+        duplicate.IsDuplicate = true;
+        duplicate.Status = "Rename preview generated";
+        var service = CreateService(new JsonLinesOperationJournal(CreateConfiguration()));
+
+        service.ExecuteChanges(
+            new List<Movie> { approved },
+            dryRun: true,
+            DestinationRoot,
+            new List<Movie> { review, error, duplicate });
+
+        var entries = ReadSingleJournal("dry-run");
+        Assert.Contains(
+            "1 approved item(s); 3 not approved",
+            entries.First().GetProperty("Detail").GetString());
+        var skipped = entries
+            .Where(entry => entry.GetProperty("Event").GetString() == "Skipped")
+            .ToDictionary(
+                entry => entry.GetProperty("SourcePath").GetString()!,
+                entry => entry.GetProperty("Detail").GetString()!);
+        Assert.Equal(3, skipped.Count);
+        Assert.Contains("needs review - Low confidence", skipped[review.OriginalFilePath]);
+        Assert.Contains("error - The source file could not be read.", skipped[error.OriginalFilePath]);
+        Assert.Contains("duplicate copy not selected", skipped[duplicate.OriginalFilePath]);
+        Assert.Equal("RunCompleted", entries.Last().GetProperty("Event").GetString());
+
+        // Not-approved items are recorded only: never mutated, never moved.
+        Assert.Equal("Needs Review", review.Status);
+        Assert.Equal("Error", error.Status);
+        Assert.Equal("Rename preview generated", duplicate.Status);
+        foreach (var movie in new[] { approved, review, error, duplicate })
+        {
+            Assert.True(File.Exists(movie.OriginalFilePath));
+            Assert.False(File.Exists(movie.TargetPath!));
+        }
+    }
+
+    [Fact]
+    public void LiveCommit_WithNothingApproved_StillWritesAJournalAndMovesNothing()
+    {
+        var review = CreateMovie("The Sure Thing", 1985, "tt0090103");
+        review.ApprovedForCommit = false;
+        review.RequireReview("Plex library conflict: already in Plex");
+        var service = CreateService(new JsonLinesOperationJournal(CreateConfiguration()));
+
+        service.ExecuteChanges(
+            new List<Movie>(),
+            dryRun: false,
+            DestinationRoot,
+            new List<Movie> { review });
+
+        var events = ReadSingleJournal("live-commit")
+            .Select(entry => entry.GetProperty("Event").GetString())
+            .ToList();
+        Assert.Equal(new[] { "RunStarted", "Skipped", "RunCompleted" }, events);
+        Assert.True(File.Exists(review.OriginalFilePath));
+        Assert.False(File.Exists(review.TargetPath!));
+        Assert.Equal(service.LastJournalLocation, Directory.GetFiles(JournalDirectory).Single());
+    }
+
+    [Fact]
+    public void LiveCommit_NeverActsOnTheNotApprovedList_EvenIfAnItemLooksApproved()
+    {
+        var approved = CreateMovie("Better Off Dead", 1985, "tt0088794");
+        var excluded = CreateMovie("The Sure Thing", 1985, "tt0090103");
+        Assert.True(excluded.ApprovedForCommit);
+        var service = CreateService(new JsonLinesOperationJournal(CreateConfiguration()));
+
+        service.ExecuteChanges(
+            new List<Movie> { approved },
+            dryRun: false,
+            DestinationRoot,
+            new List<Movie> { excluded });
+
+        Assert.True(File.Exists(approved.TargetPath!));
+        Assert.True(File.Exists(excluded.OriginalFilePath));
+        Assert.False(File.Exists(excluded.TargetPath!));
+        Assert.True(Directory.Exists(Path.GetDirectoryName(excluded.OriginalFilePath)));
+    }
+
+    [Fact]
+    public void NoApprovedAndNoNotApprovedItems_WritesNoJournal()
+    {
+        var service = CreateService(new JsonLinesOperationJournal(CreateConfiguration()));
+
+        service.ExecuteChanges(new List<Movie>(), dryRun: true, DestinationRoot, new List<Movie>());
+
+        Assert.False(Directory.Exists(JournalDirectory) &&
+                     Directory.EnumerateFiles(JournalDirectory).Any());
+    }
+
     private List<JsonElement> ReadSingleJournal(string mode)
     {
         var file = Assert.Single(Directory.GetFiles(JournalDirectory));
@@ -176,7 +280,11 @@ public sealed class OperationJournalTests : IDisposable
 
         public FailingJournal(bool failOnStart) => _failOnStart = failOnStart;
 
-        public IOperationJournalRun StartRun(bool dryRun, string destinationRoot, int itemCount)
+        public IOperationJournalRun StartRun(
+            bool dryRun,
+            string destinationRoot,
+            int itemCount,
+            int notApprovedCount = 0)
         {
             if (_failOnStart)
                 throw new IOException("Simulated journal failure.");
@@ -188,7 +296,7 @@ public sealed class OperationJournalTests : IDisposable
         {
             public string Location => "simulated";
 
-            public void Record(OperationJournalEntry entry) =>
+            public void Record(OperationJournalEntry entry, bool flushToDisk = true) =>
                 throw new IOException("Simulated journal write failure.");
 
             public void Dispose()

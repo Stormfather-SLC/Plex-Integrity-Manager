@@ -23,10 +23,14 @@ namespace PIM.Core.Interfaces
         /// Executes approved file operations. The destination root is passed
         /// explicitly so the final conflict scan covers the entire library,
         /// even when the profile creates several nested organization folders.
+        /// <paramref name="notApproved"/> lists the scanned movies that are not
+        /// part of this run; they are only recorded in the operation journal as
+        /// skipped, with the reason, and are never touched or modified.
         /// </summary>
         void ExecuteChanges(
             List<Movie> movies,
             bool dryRun,
-            string destinationRoot);
+            string destinationRoot,
+            IReadOnlyCollection<Movie>? notApproved = null);
     }
 }
