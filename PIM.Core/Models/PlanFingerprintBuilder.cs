@@ -46,6 +46,8 @@ public static class PlanFingerprintBuilder
                 movie.PlexLibraryConflictReason ?? string.Empty,
                 movie.ExistingPlexLibraryPath ?? string.Empty,
                 movie.IsPlexTrackedMigration,
+                movie.IsPossiblePlexDuplicate,
+                movie.PlexDuplicateAcceptedPath ?? string.Empty,
                 movie.PlannedLibraryGoal?.ToString() ?? string.Empty));
 
         var payload = string.Join(

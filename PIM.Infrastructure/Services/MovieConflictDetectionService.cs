@@ -120,12 +120,26 @@ namespace PIM.Infrastructure.Services
                 }
                 else if (plexResult.HasConflict)
                 {
-                    movie.HasPlexLibraryConflict = true;
                     movie.PlexLibraryConflictReason = plexPolicy?.Message ??
                                                       plexResult.Message;
                     movie.ExistingPlexLibraryPath = plexResult.ExistingPath;
                     movie.ExistingPlexResolution = plexResult.ExistingResolution;
                     movie.ExistingPlexSizeBytes = plexResult.ExistingSizeBytes;
+
+                    if (plexPolicy?.IsDuplicateDecision == true)
+                    {
+                        movie.IsPossiblePlexDuplicate = true;
+
+                        // Only an explicit choice for this exact Plex copy
+                        // lets the file through; if Plex now reports a
+                        // different copy, the user decides again.
+                        movie.HasPlexLibraryConflict =
+                            !movie.HasAcceptedPlexDuplicate(plexResult.ExistingPath);
+                    }
+                    else
+                    {
+                        movie.HasPlexLibraryConflict = true;
+                    }
                 }
 
                 if (movie.HasDestinationConflict || movie.HasPlexLibraryConflict)
@@ -270,6 +284,8 @@ namespace PIM.Infrastructure.Services
             movie.ExistingPlexSizeBytes = null;
             movie.IsPlexTrackedMigration = false;
             movie.PlexTrackedMigrationReason = null;
+            // PlexDuplicateAcceptedPath is the user's decision and is kept.
+            movie.IsPossiblePlexDuplicate = false;
 
             RemoveConflictReviewReasons(
                 movie,

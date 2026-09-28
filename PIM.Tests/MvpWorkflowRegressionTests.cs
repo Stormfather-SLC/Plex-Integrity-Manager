@@ -51,15 +51,13 @@ public sealed class MvpWorkflowRegressionTests
     [Fact]
     public void Rebuild_WorkflowChangeRecalculatesPlexPolicyWithoutMetadataRefresh()
     {
-        var plexPath = Path.Combine(
-            Path.GetTempPath(),
-            "Plex",
-            "Trustworthy Movie.mkv");
-        var planner = CreatePlanner(PlexLibraryConflictResult.Conflict(
-            PlexLibraryConflictType.SameImdbIdDifferentPath,
-            "Plex already contains the same IMDb ID.",
-            plexPath));
         var movie = CreateIdentifiedMovie();
+        // Plex tracks this exact file: blocked when organizing new movies,
+        // allowed when reorganizing what Plex already has.
+        var planner = CreatePlanner(PlexLibraryConflictResult.Conflict(
+            PlexLibraryConflictType.TracksThisFile,
+            "Plex already tracks this exact file.",
+            movie.OriginalFilePath));
         var movies = new List<Movie> { movie };
         var profile = CreateProfile("Workflow");
 

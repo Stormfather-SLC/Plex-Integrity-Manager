@@ -413,6 +413,75 @@ namespace PIM.Web.Pages
             });
         }
 
+        public IActionResult OnPostAddPlexDuplicate(Guid movieId)
+        {
+            return ApplyPlexDuplicateDecision(movieId, addAnyway: true);
+        }
+
+        public IActionResult OnPostUndoPlexDuplicate(Guid movieId)
+        {
+            return ApplyPlexDuplicateDecision(movieId, addAnyway: false);
+        }
+
+        private IActionResult ApplyPlexDuplicateDecision(Guid movieId, bool addAnyway)
+        {
+            InvalidateDryRunApproval();
+
+            if (!TryGetCachedMovies(out var movies))
+            {
+                TempData["Message"] = "The scan is no longer available. Scan the source folder again.";
+                return RedirectToPage();
+            }
+
+            var movie = movies.SingleOrDefault(candidate => candidate.Id == movieId);
+            var eligible = movie != null &&
+                           (addAnyway
+                               ? movie.NeedsPlexDuplicateDecision &&
+                                 !string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath)
+                               : !string.IsNullOrWhiteSpace(movie.PlexDuplicateAcceptedPath));
+
+            if (!eligible)
+            {
+                TempData["Message"] = addAnyway
+                    ? "That file is no longer waiting for a possible-duplicate decision. Nothing was changed."
+                    : "That file has no possible-duplicate decision to undo. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            _logger.LogInformation(
+                addAnyway
+                    ? "User chose to add {FileName} alongside the existing Plex copy at {PlexPath}; invalidating prior dry-run approval and rebuilding the plan."
+                    : "User undid the decision to add {FileName} alongside the existing Plex copy at {PlexPath}; invalidating prior dry-run approval and rebuilding the plan.",
+                movie!.FileName ?? "<unknown>",
+                addAnyway ? movie.ExistingPlexLibraryPath : movie.PlexDuplicateAcceptedPath);
+
+            movie.PlexDuplicateAcceptedPath = addAnyway
+                ? movie.ExistingPlexLibraryPath
+                : null;
+            movie.ApprovedForCommit = false;
+
+            _moviePlan.Rebuild(
+                movies,
+                _profileStore.GetActiveProfile(),
+                _config["PIM:ScanPath"] ?? string.Empty,
+                GetConfiguredLibraryGoal());
+            SetCachedMovies(movies);
+
+            TempData["Message"] = !addAnyway
+                ? $"'{movie.FileName}' will be skipped again because Plex already has this movie. Run a new dry run before live commit."
+                : movie.NeedsReview || movie.HasError
+                    ? $"'{movie.FileName}' will be added alongside the Plex copy, but it remains blocked: {movie.ReviewReason ?? movie.ErrorMessage ?? movie.Status}."
+                    : $"'{movie.FileName}' will be added alongside the existing Plex copy; Plex will then have both. Nothing is deleted. Run a new dry run before live commit.";
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
+        }
+
         public IActionResult OnPostConfirmFileName(Guid movieId)
         {
             InvalidateDryRunApproval();

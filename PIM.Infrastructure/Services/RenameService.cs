@@ -350,7 +350,8 @@ namespace PIM.Infrastructure.Services
                                 $"[PIM] Would move: {movie.OriginalFilePath} -> {movie.TargetPath}");
                             RecordBestEffort(OperationJournalEntry.ForMovie(
                                 OperationJournalEvent.WouldMove,
-                                movie));
+                                movie,
+                                DescribeUserDecisions(movie)));
                             continue;
                         }
 
@@ -403,7 +404,8 @@ namespace PIM.Infrastructure.Services
                         {
                             journalRun.Record(OperationJournalEntry.ForMovie(
                                 OperationJournalEvent.MoveStarting,
-                                movie));
+                                movie,
+                                DescribeUserDecisions(movie)));
                         }
                         catch (Exception journalEx)
                         {
@@ -440,7 +442,8 @@ namespace PIM.Infrastructure.Services
                         {
                             journalRun.Record(OperationJournalEntry.ForMovie(
                                 OperationJournalEvent.Moved,
-                                movie));
+                                movie,
+                                DescribeUserDecisions(movie)));
                         }
                         catch (Exception journalEx)
                         {
@@ -887,6 +890,31 @@ namespace PIM.Infrastructure.Services
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Human decisions that made this move possible, for the journal, or
+        /// null when the move needed none.
+        /// </summary>
+        private static string? DescribeUserDecisions(Movie movie)
+        {
+            var decisions = new List<string>();
+
+            if (movie.IsPlexDuplicateAccepted)
+            {
+                decisions.Add(
+                    $"User chose to add this alongside the existing Plex copy at {movie.ExistingPlexLibraryPath}");
+            }
+
+            if (movie.IsManuallyKept)
+                decisions.Add("User chose this file as the copy to keep");
+
+            if (movie.FileNameConfirmed)
+                decisions.Add("User confirmed the unusually long file name");
+
+            return decisions.Count == 0
+                ? null
+                : string.Join("; ", decisions) + ".";
         }
 
         /// <summary>

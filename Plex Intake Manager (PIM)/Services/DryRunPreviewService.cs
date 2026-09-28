@@ -82,6 +82,8 @@ public class DryRunPreviewService : IDryRunPreviewService
             ExistingPlexSizeBytes = movie.ExistingPlexSizeBytes,
             SourceResolution = movie.SourceResolution,
             SourceSizeBytes = movie.FileSizeBytes,
+            NeedsPlexDuplicateDecision = movie.NeedsPlexDuplicateDecision,
+            IsPlexDuplicateAccepted = movie.IsPlexDuplicateAccepted,
             IsPlexTrackedMigration = movie.IsPlexTrackedMigration,
             PlexTrackedMigrationReason = movie.PlexTrackedMigrationReason ?? string.Empty
         };

@@ -7,11 +7,28 @@
         SameImdbIdDifferentPath,
         SameTitleYearDifferentPath,
         ExistingAlternateVersion,
-        LibraryMismatch
+        LibraryMismatch,
+
+        /// <summary>
+        /// Plex already tracks this exact source file (same path and identity).
+        /// Moving it reorganizes the file Plex knows rather than adding a copy.
+        /// </summary>
+        TracksThisFile
     }
 
     public sealed class PlexLibraryConflictResult
     {
+        /// <summary>
+        /// Plex has what looks like the same movie as a different file: the
+        /// same IMDb ID or title/year elsewhere, or another edition. The new
+        /// file may still be a different version (resolution, encode, cut), so
+        /// this is a decision for the user rather than a hard stop.
+        /// </summary>
+        public bool IsPossibleDuplicate => ConflictType is
+            PlexLibraryConflictType.SameImdbIdDifferentPath or
+            PlexLibraryConflictType.SameTitleYearDifferentPath or
+            PlexLibraryConflictType.ExistingAlternateVersion;
+
         public bool HasConflict => ConflictType != PlexLibraryConflictType.None;
 
         public PlexLibraryConflictType ConflictType { get; init; }
