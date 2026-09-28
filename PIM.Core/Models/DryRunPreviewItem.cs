@@ -66,6 +66,14 @@ public class DryRunPreviewItem
 
     public string ExistingPlexLibraryPath { get; set; } = string.Empty;
 
+    public string? ExistingPlexResolution { get; set; }
+
+    public long? ExistingPlexSizeBytes { get; set; }
+
+    public string? SourceResolution { get; set; }
+
+    public long SourceSizeBytes { get; set; }
+
     public bool IsPlexTrackedMigration { get; set; }
 
     public string PlexTrackedMigrationReason { get; set; } = string.Empty;

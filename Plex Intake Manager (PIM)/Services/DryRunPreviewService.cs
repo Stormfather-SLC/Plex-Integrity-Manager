@@ -78,6 +78,10 @@ public class DryRunPreviewService : IDryRunPreviewService
             HasPlexLibraryConflict = movie.HasPlexLibraryConflict,
             PlexLibraryConflictReason = movie.PlexLibraryConflictReason ?? string.Empty,
             ExistingPlexLibraryPath = movie.ExistingPlexLibraryPath ?? string.Empty,
+            ExistingPlexResolution = movie.ExistingPlexResolution,
+            ExistingPlexSizeBytes = movie.ExistingPlexSizeBytes,
+            SourceResolution = movie.SourceResolution,
+            SourceSizeBytes = movie.FileSizeBytes,
             IsPlexTrackedMigration = movie.IsPlexTrackedMigration,
             PlexTrackedMigrationReason = movie.PlexTrackedMigrationReason ?? string.Empty
         };

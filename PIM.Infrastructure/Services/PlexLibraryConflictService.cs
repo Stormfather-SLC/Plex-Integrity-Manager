@@ -107,16 +107,16 @@ namespace PIM.Infrastructure.Services
                 {
                     if (!IdentityMatches(movieImdbId, movieTitle, movie.Year, targetPathEntry))
                     {
-                        return PlexLibraryConflictResult.Conflict(
+                        return ConflictFor(
                             PlexLibraryConflictType.LibraryMismatch,
                             $"Plex already associates the proposed target path with a different library item: {FormatIdentity(targetPathEntry)}.",
-                            GetDisplayPath(targetPathEntry));
+                            targetPathEntry);
                     }
 
-                    return PlexLibraryConflictResult.Conflict(
+                    return ConflictFor(
                         PlexLibraryConflictType.AlreadyExistsAtTargetPath,
                         $"Plex already contains this movie at the proposed target path: {FormatIdentity(targetPathEntry)}.",
-                        GetDisplayPath(targetPathEntry));
+                        targetPathEntry);
                 }
             }
 
@@ -167,18 +167,18 @@ namespace PIM.Infrastructure.Services
 
                     if (sameEdition != null)
                     {
-                        return PlexLibraryConflictResult.Conflict(
+                        return ConflictFor(
                             PlexLibraryConflictType.SameImdbIdDifferentPath,
                             $"Plex already contains IMDb {movieImdbId} with the same edition at a different path.",
-                            GetDisplayPath(sameEdition));
+                            sameEdition);
                     }
 
                     var alternateEdition = imdbMatchesElsewhere[0];
 
-                    return PlexLibraryConflictResult.Conflict(
+                    return ConflictFor(
                         PlexLibraryConflictType.ExistingAlternateVersion,
                         $"Plex already contains IMDb {movieImdbId} as another edition ({FormatEdition(alternateEdition.EditionKey)}).",
-                        GetDisplayPath(alternateEdition));
+                        alternateEdition);
                 }
             }
 
@@ -194,16 +194,16 @@ namespace PIM.Infrastructure.Services
                         titleYearMatch.ImdbId,
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    return PlexLibraryConflictResult.Conflict(
+                    return ConflictFor(
                         PlexLibraryConflictType.LibraryMismatch,
                         $"Plex contains the same title and year but with a different IMDb ID ({titleYearMatch.ImdbId}).",
-                        GetDisplayPath(titleYearMatch));
+                        titleYearMatch);
                 }
 
-                return PlexLibraryConflictResult.Conflict(
+                return ConflictFor(
                     PlexLibraryConflictType.SameTitleYearDifferentPath,
                     "Plex already contains the same title and year at a different path.",
-                    GetDisplayPath(titleYearMatch));
+                    titleYearMatch);
             }
 
             return PlexLibraryConflictResult.NoConflict();
@@ -428,13 +428,22 @@ namespace PIM.Infrastructure.Services
             PlexMovieDto item,
             string? libraryTitle)
         {
-            var paths = item.Media?
-                .SelectMany(media => media.Part ?? new List<PlexPartDto>())
-                .Select(part => NormalizePath(part.File))
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .Select(path => path!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList() ?? new List<string>();
+            var files = (item.Media ?? new List<PlexMediaDto>())
+                .SelectMany(media => (media.Part ?? new List<PlexPartDto>())
+                    .Select(part => new
+                    {
+                        Path = NormalizePath(part.File),
+                        Resolution = VideoResolution.FromPlex(media.VideoResolution),
+                        part.Size
+                    }))
+                .Where(file => !string.IsNullOrWhiteSpace(file.Path))
+                .GroupBy(file => file.Path!, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new PlexFile(
+                    group.Key,
+                    group.First().Resolution,
+                    group.First().Size))
+                .ToList();
+            var paths = files.Select(file => file.Path).ToList();
 
             // Prefer explicit external GUID data when Plex provides it.
             var imdbId = item.Guids?
@@ -466,6 +475,7 @@ namespace PIM.Infrastructure.Services
                 imdbId,
                 NormalizeEdition(edition),
                 paths,
+                files,
                 libraryTitle);
         }
 
@@ -565,10 +575,23 @@ namespace PIM.Infrastructure.Services
                 .TrimEnd('/');
         }
 
-        private static string GetDisplayPath(PlexLibraryEntry entry)
+        /// <summary>
+        /// Builds a conflict that carries the existing Plex copy's path,
+        /// resolution, and size so the user can compare it with the new file.
+        /// </summary>
+        private static PlexLibraryConflictResult ConflictFor(
+            PlexLibraryConflictType conflictType,
+            string message,
+            PlexLibraryEntry entry)
         {
-            return entry.Paths.FirstOrDefault()
-                   ?? $"Plex library item: {FormatIdentity(entry)}";
+            var file = entry.Files.FirstOrDefault();
+
+            return PlexLibraryConflictResult.Conflict(
+                conflictType,
+                message,
+                file?.Path ?? $"Plex library item: {FormatIdentity(entry)}",
+                file?.Resolution,
+                file?.SizeBytes);
         }
 
         private static string FormatIdentity(PlexLibraryEntry entry)
@@ -602,7 +625,14 @@ namespace PIM.Infrastructure.Services
             string? ImdbId,
             string EditionKey,
             IReadOnlyList<string> Paths,
+            IReadOnlyList<PlexFile> Files,
             string? LibraryTitle);
+
+        /// <summary>One media file Plex reports for a library item.</summary>
+        private sealed record PlexFile(
+            string Path,
+            string? Resolution,
+            long? SizeBytes);
 
         private sealed class PlexSectionsEnvelope
         {
@@ -672,6 +702,10 @@ namespace PIM.Infrastructure.Services
 
         private sealed class PlexMediaDto
         {
+            [JsonPropertyName("videoResolution")]
+            [JsonConverter(typeof(FlexibleStringConverter))]
+            public string? VideoResolution { get; set; }
+
             [JsonPropertyName("Part")]
             public List<PlexPartDto>? Part { get; set; }
         }
@@ -680,6 +714,47 @@ namespace PIM.Infrastructure.Services
         {
             [JsonPropertyName("file")]
             public string? File { get; set; }
+
+            [JsonPropertyName("size")]
+            [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+            public long? Size { get; set; }
+        }
+
+        /// <summary>
+        /// Plex reports videoResolution as a string ("1080", "4k") on most
+        /// servers but as a number on some; accept either.
+        /// </summary>
+        private sealed class FlexibleStringConverter : JsonConverter<string?>
+        {
+            public override string? Read(
+                ref Utf8JsonReader reader,
+                Type typeToConvert,
+                JsonSerializerOptions options)
+            {
+                return reader.TokenType switch
+                {
+                    JsonTokenType.String => reader.GetString(),
+                    JsonTokenType.Number => reader.TryGetInt64(out var number)
+                        ? number.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        : null,
+                    JsonTokenType.Null => null,
+                    _ => SkipAndReturnNull(ref reader)
+                };
+            }
+
+            public override void Write(
+                Utf8JsonWriter writer,
+                string? value,
+                JsonSerializerOptions options)
+            {
+                writer.WriteStringValue(value);
+            }
+
+            private static string? SkipAndReturnNull(ref Utf8JsonReader reader)
+            {
+                reader.Skip();
+                return null;
+            }
         }
     }
 }

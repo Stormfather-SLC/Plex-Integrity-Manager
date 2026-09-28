@@ -534,6 +534,12 @@
                                                     <strong>Existing Plex Path:</strong>
                                                     <div class="text-break">@item.ExistingPlexLibraryPath</div>
                                                 </div>
+                                                <div>
+                                                    <strong>Plex copy:</strong> @(item.ExistingPlexResolution ?? "resolution unknown"), @PIM.Core.Models.VideoResolution.FormatSize(item.ExistingPlexSizeBytes)
+                                                </div>
+                                                <div>
+                                                    <strong>This file:</strong> @(item.SourceResolution ?? "resolution not in file name"), @PIM.Core.Models.VideoResolution.FormatSize(item.SourceSizeBytes)
+                                                </div>
                                             }
 
                                             @if (!string.IsNullOrWhiteSpace(item.TargetPath))
@@ -962,6 +968,12 @@
                                                 <div class="text-break">
                                                     <strong>Existing Plex Path:</strong> @movie.ExistingPlexLibraryPath
                                                 </div>
+                                                <div>
+                                                    <strong>Plex copy:</strong> @(movie.ExistingPlexResolution ?? "resolution unknown"), @PIM.Core.Models.VideoResolution.FormatSize(movie.ExistingPlexSizeBytes)
+                                                </div>
+                                                <div>
+                                                    <strong>This file:</strong> @(movie.SourceResolution ?? "resolution not in file name"), @PIM.Core.Models.VideoResolution.FormatSize(movie.FileSizeBytes)
+                                                </div>
                                             }
                                             @if (!string.IsNullOrWhiteSpace(movie.TargetPath))
                                             {
@@ -982,6 +994,9 @@
                                                 <div class="text-break">
                                                     <strong>Existing Plex Path:</strong>
                                                     @movie.ExistingPlexLibraryPath
+                                                </div>
+                                                <div>
+                                                    <strong>Plex copy:</strong> @(movie.ExistingPlexResolution ?? "resolution unknown"), @PIM.Core.Models.VideoResolution.FormatSize(movie.ExistingPlexSizeBytes)
                                                 </div>
                                             }
                                         </div>
