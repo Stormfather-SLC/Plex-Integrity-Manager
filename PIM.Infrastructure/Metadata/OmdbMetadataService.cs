@@ -1281,6 +1281,9 @@ namespace PIM.Infrastructure.Metadata
 
             if (missingFields.Count > 0)
             {
+                if (!hasImdbId)
+                    RestoreParsedIdentity(movie, parsedTitle, parsedYear, originalImdbId);
+
                 var detail = string.Join(", ", missingFields);
                 MarkLookupFailure(
                     movie,
@@ -1304,6 +1307,13 @@ namespace PIM.Infrastructure.Metadata
 
             if (movie.MatchConfidence < 85)
             {
+                // The OMDb result is only a guess. It stays in the Suggested*
+                // fields for the user to accept; the file keeps its own parsed
+                // identity. Writing the guess's IMDb ID onto the movie would let
+                // the next enrichment look it up by that ID, "validate" it
+                // against itself, and approve it without any human decision.
+                RestoreParsedIdentity(movie, parsedTitle, parsedYear, originalImdbId);
+
                 var reviewReason =
                     $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)";
                 movie.SetMetadataReview(
@@ -1318,6 +1328,26 @@ namespace PIM.Infrastructure.Metadata
                     ? "Needs Review"
                     : "Metadata Enriched";
             }
+        }
+
+        /// <summary>
+        /// Undoes an unconfirmed title-based result so the movie keeps the
+        /// identity parsed from its file. The candidate remains available in the
+        /// Suggested* fields.
+        /// </summary>
+        private static void RestoreParsedIdentity(
+            Movie movie,
+            string? parsedTitle,
+            int? parsedYear,
+            string? originalImdbId)
+        {
+            movie.Title = parsedTitle;
+            movie.Year = parsedYear;
+            movie.ImdbId = originalImdbId;
+            movie.MpaRating = null;
+            movie.Genres = new List<string>();
+            movie.PrimaryGenre = null;
+            movie.MetadataFetched = false;
         }
 
         private void MarkOmdbFailure(Movie movie, string? rawError)
