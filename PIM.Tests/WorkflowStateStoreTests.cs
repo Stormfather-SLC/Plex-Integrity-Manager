@@ -195,7 +195,7 @@ public sealed class WorkflowStateStoreTests
             Path.Combine(workspace.StateDirectory, "scan.json"),
             $$"""
             {
-              "SchemaVersion": 1,
+              "SchemaVersion": {{JsonWorkflowStateStore.SchemaVersion}},
               "SourceRoot": {{System.Text.Json.JsonSerializer.Serialize(workspace.SourceRoot)}},
               "Movies": [ { "Title": "No Source Path" } ]
             }
@@ -211,13 +211,33 @@ public sealed class WorkflowStateStoreTests
         var configuration = CreateConfiguration(workspace);
         SaveScanAndApproval(CreateStore(configuration), workspace, DateTime.UtcNow);
         var scanPath = Path.Combine(workspace.StateDirectory, "scan.json");
-        File.WriteAllText(
-            scanPath,
-            File.ReadAllText(scanPath).Replace(
-                "\"SchemaVersion\":1",
-                "\"SchemaVersion\":99"));
+        var saved = File.ReadAllText(scanPath);
+        var current = $"\"SchemaVersion\":{JsonWorkflowStateStore.SchemaVersion}";
+        Assert.Contains(current, saved);
+        File.WriteAllText(scanPath, saved.Replace(current, "\"SchemaVersion\":99"));
 
         Assert.False(CreateStore(configuration).TryGetMovies(out _));
+    }
+
+    [Fact]
+    public void ScanSavedBeforeUnconfirmedIdentityFix_IsSetAsideAndNotRestored()
+    {
+        using var workspace = new TempWorkspace("PIM-WorkflowState-Tests");
+        var configuration = CreateConfiguration(workspace);
+        SaveScanAndApproval(CreateStore(configuration), workspace, DateTime.UtcNow);
+        var scanPath = Path.Combine(workspace.StateDirectory, "scan.json");
+        var saved = File.ReadAllText(scanPath);
+        File.WriteAllText(
+            scanPath,
+            saved.Replace(
+                $"\"SchemaVersion\":{JsonWorkflowStateStore.SchemaVersion}",
+                "\"SchemaVersion\":1"));
+
+        var restarted = CreateStore(configuration);
+
+        Assert.False(restarted.TryGetMovies(out _));
+        Assert.Null(restarted.GetDryRunApproval());
+        Assert.Single(Directory.GetFiles(workspace.StateDirectory, "scan.json.corrupt-*"));
     }
 
     [Fact]

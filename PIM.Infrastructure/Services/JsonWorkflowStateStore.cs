@@ -23,7 +23,13 @@ namespace PIM.Infrastructure.Services;
 /// </remarks>
 public sealed class JsonWorkflowStateStore : IWorkflowStateStore
 {
-    public const int SchemaVersion = 1;
+    /// <summary>
+    /// Bump when saved state could be unsafe to reuse under new rules; older
+    /// files are then set aside and the user rescans. Version 2: scans saved
+    /// before low-confidence title matches stopped overwriting the file's own
+    /// identity may carry an unconfirmed IMDb ID.
+    /// </summary>
+    public const int SchemaVersion = 2;
 
     private const string ScanFileName = "scan.json";
     private const string DryRunFileName = "dry-run.json";
