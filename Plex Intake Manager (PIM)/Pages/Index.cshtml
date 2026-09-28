@@ -2,6 +2,7 @@
 @model PIM.Web.Pages.IndexModel
 @{
     ViewData["Title"] = "Plex Integrity Manager";
+    ViewData["FullWidth"] = true;
 }
 
 <!-- =========================================================
@@ -217,6 +218,26 @@
     .movie-filter-card.active,
     .dry-run-filter-card.active {
         box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
+    }
+
+    /* Movie Results: one compact line per movie, details on demand. */
+    .movie-filter-card {
+        min-width: 9rem;
+    }
+
+    .movie-results .summary-line,
+    .movie-results .path-line {
+        max-width: 80ch;
+    }
+
+    .movie-results .movie-details-row > td {
+        background-color: #f8f9fa;
+        border-top: 0;
+        padding: 0.75rem 1rem;
+    }
+
+    .movie-results .movie-details-row dl {
+        margin-bottom: 0;
     }
 </style>
 
@@ -653,287 +674,349 @@
              id="movies-pane"
              role="tabpanel">
 
-            <div class="row g-3 mb-3">
-                <div class="col-6 col-lg-3 d-flex">
+            @{
+                var resultRows = Model.ResultRows;
+                var recommendedValue = Model.ShowOnlyRecommended.ToString().ToLowerInvariant();
+                var stateCards = new[]
+                {
+                    (Key: "decide", Label: "Your decision", Css: "text-primary", Hint: "PIM needs you to choose; use the buttons on each row"),
+                    (Key: "blocked", Label: "Blocked", Css: "text-warning-emphasis", Hint: "Fix the cause outside PIM, then run a new dry run"),
+                    (Key: "error", Label: "Errors", Css: "text-danger", Hint: "Could not be processed"),
+                    (Key: "ready", Label: "Ready", Css: "text-success", Hint: "Will be moved by a live commit after a dry run"),
+                    (Key: "skipped", Label: "Skipped", Css: "text-secondary", Hint: "Duplicate copies left where they are; nothing is deleted"),
+                    (Key: "pending", Label: "Not identified", Css: "text-muted", Hint: "Run Identify Movies")
+                };
+            }
+
+            <div class="d-flex flex-wrap gap-2 mb-2"
+                 id="movieFilterCards"
+                 data-default-filter="@(resultRows.Any(row => row.State == MovieResultState.Decide) ? "decide" : "all")">
+                @foreach (var card in stateCards)
+                {
+                    var count = resultRows.Count(row => row.FilterKey == card.Key);
+
+                    if (card.Key == "pending" && count == 0)
+                    {
+                        continue;
+                    }
+
                     <button type="button"
-                            class="card h-100 text-center w-100 movie-filter-card"
-                            data-movie-filter="ready"
-                            aria-pressed="false">
-                        <span class="card-body">
-                            <span class="fs-4 fw-bold text-success">
-                                @Model.Movies.Count(movie =>
-                                    !movie.HasError &&
-                                    !movie.NeedsReview &&
-                                    (!movie.IsDuplicate || movie.KeepRecommended || movie.IsAlternateVersion))
-                            </span>
-                            <span class="d-block">Ready / Keep</span>
-                        </span>
+                            class="card movie-filter-card flex-row align-items-baseline gap-2 px-3 py-2"
+                            data-movie-filter="@card.Key"
+                            aria-pressed="false"
+                            title="@card.Hint">
+                        <span class="fs-5 fw-bold @card.Css">@count</span>
+                        <span>@card.Label</span>
                     </button>
-                </div>
-                <div class="col-6 col-lg-3 d-flex">
-                    <button type="button"
-                            class="card h-100 text-center w-100 movie-filter-card"
-                            data-movie-filter="duplicate"
-                            aria-pressed="false">
-                        <span class="card-body">
-                            <span class="fs-4 fw-bold" style="color:#8a1538;">
-                                @Model.Movies.Count(movie =>
-                                    !movie.HasError &&
-                                    !movie.NeedsReview &&
-                                    movie.IsDuplicate &&
-                                    !movie.KeepRecommended &&
-                                    !movie.IsAlternateVersion)
-                            </span>
-                            <span class="d-block">Duplicates</span>
-                        </span>
-                    </button>
-                </div>
-                <div class="col-6 col-lg-3 d-flex">
-                    <button type="button"
-                            class="card h-100 text-center w-100 movie-filter-card"
-                            data-movie-filter="review"
-                            aria-pressed="false">
-                        <span class="card-body">
-                            <span class="fs-4 fw-bold text-primary">
-                                @Model.Movies.Count(movie => movie.NeedsReview && !movie.HasError)
-                            </span>
-                            <span class="d-block">Needs Review</span>
-                        </span>
-                    </button>
-                </div>
-                <div class="col-6 col-lg-3 d-flex">
-                    <button type="button"
-                            class="card h-100 text-center w-100 movie-filter-card"
-                            data-movie-filter="error"
-                            aria-pressed="false">
-                        <span class="card-body">
-                            <span class="fs-4 fw-bold text-danger">
-                                @Model.Movies.Count(movie => movie.HasError)
-                            </span>
-                            <span class="d-block">Errors</span>
-                        </span>
-                    </button>
-                </div>
+                }
+                <button type="button"
+                        class="btn btn-link btn-sm align-self-center"
+                        id="movieFilterShowAll">
+                    Show all @resultRows.Count
+                </button>
             </div>
 
-            <p id="movieFilterStatus" class="text-muted">
-                Select a summary card to filter the movie results. Select it again to show all movies.
-            </p>
+            <p id="movieFilterStatus" class="text-muted small mb-2"></p>
 
-            <div style="max-height:700px; overflow:auto;">
-
-                <table border="1"
-                       cellpadding="5"
-                       cellspacing="0"
-                       style="width:100%; border-collapse:collapse;">
-
-                    <thead style="background-color:#f2f2f2;">
+            @if (!resultRows.Any())
+            {
+                <p class="text-muted">No movies scanned yet. Use <strong>Scan Movies</strong> to begin.</p>
+            }
+            else
+            {
+                <table class="table table-sm table-hover align-middle movie-results mb-0">
+                    <thead class="table-light">
                         <tr>
-                            <th style="text-align:center; width:70px;">Commit</th>
-                            <th>Title</th>
-                            <th>Year</th>
-                            <th>Size (MB)</th>
-                            <th>Status</th>
-                            <th>Version</th>
-                            <th>Action</th>
-                            <th>Review Reason</th>
-                            <th>Original (Before)</th>
-                            <th>New (After)</th>
+                            <th style="width:9rem;">Status</th>
+                            <th>Movie</th>
+                            <th>What PIM found</th>
+                            <th class="text-end" style="width:1%;">Actions</th>
                         </tr>
                     </thead>
-
                     <tbody>
-                        @foreach (var movie in Model.Movies)
+                        @foreach (var row in resultRows)
                         {
-                            var rowClass =
-                            movie.HasError ? "row-error" :
-                            movie.NeedsReview ? "row-review" :
-                            (movie.IsDuplicate &&
-                            !movie.KeepRecommended &&
-                            !movie.IsAlternateVersion)
-                            ? "row-delete" :
-                            movie.KeepRecommended ? "row-best" :
-                            movie.IsAlternateVersion ? "row-alt" :
-                            "";
+                            var movie = row.Movie;
+                            var rowId = $"movie-{movie.Id:N}";
+                            var detailsId = $"details-{movie.Id:N}";
+                            var showPlex = movie.HasPlexLibraryConflict ||
+                                           movie.IsPlexDuplicateAccepted ||
+                                           movie.IsPlexTrackedMigration;
 
-                            var movieCategory =
-                                movie.HasError ? "error" :
-                                movie.NeedsReview ? "review" :
-                                (movie.IsDuplicate &&
-                                 !movie.KeepRecommended &&
-                                 !movie.IsAlternateVersion)
-                                    ? "duplicate"
-                                    : "ready";
-
-                            <tr class="movie-results-row @rowClass"
-                                data-movie-category="@movieCategory">
-
-                                <td style="text-align:center;">
-                                    <input type="checkbox"
-                                           @(movie.ApprovedForCommit ? "checked" : "")
-                                           disabled />
-                                </td>
-
-                                <td>@movie.Title</td>
-                                <td>@movie.Year</td>
-                                <td>@(movie.FileSizeBytes / (1024 * 1024))</td>
-
+                            <tr class="movie-results-row"
+                                id="@rowId"
+                                data-movie-category="@row.FilterKey"
+                                data-details-id="@detailsId">
                                 <td>
-                                    @if (movie.HasError)
+                                    <span class="badge @row.BadgeClass">@row.StateLabel</span>
+                                </td>
+                                <td>
+                                    <div class="fw-semibold">
+                                        @row.DisplayTitle
+                                        @if (movie.Year.HasValue && !string.IsNullOrWhiteSpace(movie.Title))
+                                        {
+                                            <span class="fw-normal">(@movie.Year)</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(movie.VersionTag))
+                                        {
+                                            <span class="badge text-bg-light border fw-normal ms-1">@movie.VersionTag</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(movie.SourceResolution))
+                                        {
+                                            <span class="badge text-bg-light border fw-normal ms-1">@movie.SourceResolution</span>
+                                        }
+                                    </div>
+                                    <div class="small text-muted text-truncate path-line" title="@movie.OriginalFilePath">
+                                        @row.SourceDisplay
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="text-truncate summary-line" title="@row.Summary">@row.Summary</div>
+                                    @if (row.AdditionalReasonCount > 0)
                                     {
-                                        <span>❌ Error</span>
+                                        <div class="small text-muted">
+                                            +@row.AdditionalReasonCount more @(row.AdditionalReasonCount == 1 ? "reason" : "reasons") in Details
+                                        </div>
                                     }
-                                    else if (movie.NeedsReview)
+                                    else if (row.State == MovieResultState.Ready && row.TargetDisplay != null)
                                     {
-                                        <span>🔍 Needs Review</span>
-                                    }
-                                    else if (movie.KeepRecommended)
-                                    {
-                                        <span>⭐ Best Version</span>
-                                    }
-                                    else if (movie.IsAlternateVersion)
-                                    {
-                                        <span>🎬 Alternate Version</span>
-                                    }
-                                    else if (movie.IsDuplicate)
-                                    {
-                                        <span>⏭ Duplicate to Skip</span>
-                                    }
-                                    else
-                                    {
-                                        <span>✔ Unique</span>
+                                        <div class="small text-muted text-truncate path-line" title="@movie.TargetPath">
+                                            → @row.TargetDisplay
+                                        </div>
                                     }
                                 </td>
-
-                                <td>
-                                    @(string.IsNullOrWhiteSpace(movie.VersionTag) ? "-" : movie.VersionTag)
+                                <td class="text-nowrap">
+                                    <div class="d-flex gap-1 justify-content-end">
+                                        @if (row.CanAddPlexDuplicate)
+                                        {
+                                            <form method="post" asp-page-handler="AddPlexDuplicate" class="d-inline">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="movieId" value="@movie.Id" />
+                                                <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
+                                                <button type="submit"
+                                                        class="btn btn-sm btn-primary"
+                                                        title="Move this file too. Plex will then have both copies. Nothing is deleted.">
+                                                    Add anyway
+                                                </button>
+                                            </form>
+                                        }
+                                        @if (row.CanUndoPlexDuplicate)
+                                        {
+                                            <form method="post" asp-page-handler="UndoPlexDuplicate" class="d-inline">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="movieId" value="@movie.Id" />
+                                                <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
+                                                <button type="submit"
+                                                        class="btn btn-sm btn-outline-secondary"
+                                                        title="Skip this file again because Plex already has the movie.">
+                                                    Undo add
+                                                </button>
+                                            </form>
+                                        }
+                                        @if (row.CanKeepThisCopy)
+                                        {
+                                            <form method="post" asp-page-handler="KeepDuplicateCopy" class="d-inline">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="movieId" value="@movie.Id" />
+                                                <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
+                                                <button type="submit"
+                                                        class="btn btn-sm btn-primary"
+                                                        title="Keep this copy (@PIM.Core.Models.VideoResolution.FormatSize(movie.FileSizeBytes)); the other copies are skipped, not deleted.">
+                                                    Keep this copy
+                                                </button>
+                                            </form>
+                                        }
+                                        @if (row.CanAcceptSuggestion)
+                                        {
+                                            <form method="post" asp-page-handler="AcceptSuggestedMatch" class="d-inline">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="movieId" value="@movie.Id" />
+                                                <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
+                                                <button type="submit"
+                                                        class="btn btn-sm btn-primary"
+                                                        title="Accept @movie.SuggestedTitle (@movie.SuggestedYear), @movie.SuggestedImdbId">
+                                                    Accept match
+                                                </button>
+                                            </form>
+                                        }
+                                        @if (row.CanConfirmFileName)
+                                        {
+                                            <form method="post" asp-page-handler="ConfirmFileName" class="d-inline">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="movieId" value="@movie.Id" />
+                                                <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
+                                                <button type="submit"
+                                                        class="btn btn-sm btn-primary"
+                                                        title="Confirm this file is the movie shown, despite its long name.">
+                                                    Confirm name
+                                                </button>
+                                            </form>
+                                        }
+                                        @if (row.CanEnterImdbId)
+                                        {
+                                            <button type="button"
+                                                    class="btn btn-sm btn-outline-primary"
+                                                    data-open-details="@detailsId"
+                                                    data-focus="imdb-@movie.Id">
+                                                Enter IMDb ID
+                                            </button>
+                                        }
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-secondary"
+                                                data-toggle-details="@detailsId"
+                                                aria-expanded="false"
+                                                aria-controls="@detailsId">
+                                            Details
+                                        </button>
+                                    </div>
                                 </td>
+                            </tr>
 
-                                <td>
-                                    @if (movie.HasError)
-                                    {
-                                        <span style="color:#721c24;">Fix</span>
-                                    }
-                                    else if (movie.NeedsReview)
-                                    {
-                                        <span style="color:#004085;">Review</span>
-                                    }
-                                    else if (movie.KeepRecommended)
-                                    {
-                                        <span style="color:#856404;">Keep</span>
-                                    }
-                                    else if (movie.IsAlternateVersion)
-                                    {
-                                        <span style="color:#155724;">Keep</span>
-                                    }
-                                    else if (movie.IsDuplicate)
-                                    {
-                                        <span style="color:#8a4b00;">Skip (no deletion)</span>
-                                    }
-                                    else
-                                    {
-                                        <span>None</span>
-                                    }
-                                </td>
-
-                                <td>
-                                    @if (movie.NeedsReview)
-                                    {
-                                        <div class="alert alert-primary mb-1 p-2" style="font-size:0.8em;">
-                                            <div class="fw-bold">Execution blocked</div>
-                                            <div><strong>Why this needs review:</strong></div>
-                                            <ul class="mb-1 ps-3">
-                                                @foreach (var reason in (movie.ReviewReason ?? "Review required before commit").Split(
-                                                    " | ",
-                                                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                                                {
-                                                    <li>@reason</li>
-                                                }
-                                            </ul>
-                                            <div><strong>Source:</strong> <span class="text-break">@movie.OriginalFilePath</span></div>
-                                            <div><strong>Parsed identity:</strong> @movie.Title (@(movie.Year?.ToString() ?? "year unknown"))</div>
-                                            <div><strong>IMDb ID:</strong> @(string.IsNullOrWhiteSpace(movie.ImdbId) ? "Not determined" : movie.ImdbId)</div>
-                                            <div><strong>Edition:</strong> @(string.IsNullOrWhiteSpace(movie.VersionTag) ? "Standard" : movie.VersionTag)</div>
-                                            @if (movie.MatchConfidence.HasValue)
+                            <tr class="movie-details-row" id="@detailsId" hidden>
+                                <td colspan="4">
+                                    <div class="row g-3 small">
+                                        <div class="col-lg-6">
+                                            @if (movie.HasError)
                                             {
-                                                <div><strong>Metadata confidence:</strong> @movie.MatchConfidence.Value.ToString("0")%</div>
+                                                <div class="text-danger mb-2"><strong>Error:</strong> @movie.ErrorMessage</div>
                                             }
-                                            @if (!string.IsNullOrWhiteSpace(movie.MetadataLookupFailureDetail))
+                                            @if (row.Reasons.Count > 0)
                                             {
-                                                <div><strong>Metadata diagnostic:</strong> @movie.MetadataLookupFailureDetail</div>
+                                                <div class="fw-semibold">Why this needs attention</div>
+                                                <ul class="mb-2 ps-3">
+                                                    @foreach (var reason in row.Reasons)
+                                                    {
+                                                        <li>@reason</li>
+                                                    }
+                                                </ul>
                                             }
-                                            @if (!string.IsNullOrWhiteSpace(movie.MetadataDiscoveryReason))
+                                            @if (row.CanKeepThisCopy)
                                             {
-                                                <div><strong>Candidate discovery:</strong> @movie.MetadataDiscoveryReason</div>
+                                                <p class="mb-2">
+                                                    Other copies of this movie and edition are too close in size to pick one automatically.
+                                                    <strong>Keep this copy</strong> (@PIM.Core.Models.VideoResolution.FormatSize(movie.FileSizeBytes)) marks the others as skipped. No file is deleted.
+                                                </p>
                                             }
-                                            @if (movie.IsDuplicate)
+                                            @if (row.CanConfirmFileName)
                                             {
-                                                <div><strong>Duplicate decision:</strong> @(movie.KeepRecommended ? "Recommended copy" : "Not selected as the preferred copy")</div>
-                                            }
-                                            @if (movie.HasSuspiciousFileNameReview)
-                                            {
-                                                <div class="mt-2 p-2 bg-light border rounded">
-                                                    <div>
-                                                        This file name is unusually long (@(movie.FileName?.Length ?? 0) characters), which can mean a sample, a bundle, or a mislabeled file.
-                                                        Check the file, then confirm it is the movie shown above.
-                                                    </div>
-                                                    <form method="post" asp-page-handler="ConfirmFileName" class="mt-1">
-                                                        @Html.AntiForgeryToken()
-                                                        <input type="hidden" name="movieId" value="@movie.Id" />
-                                                        <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
-                                                        <button type="submit" class="btn btn-sm btn-primary">
-                                                            Confirm File Name
-                                                        </button>
-                                                    </form>
-                                                </div>
-                                            }
-                                            @if (movie.HasDuplicateTieReview)
-                                            {
-                                                <div class="mt-2 p-2 bg-light border rounded">
-                                                    <div>
-                                                        PIM found other copies of this movie and edition that are too close in size to pick one automatically.
-                                                        Keeping this copy marks the others as skipped. No file is deleted.
-                                                    </div>
-                                                    <form method="post" asp-page-handler="KeepDuplicateCopy" class="mt-1">
-                                                        @Html.AntiForgeryToken()
-                                                        <input type="hidden" name="movieId" value="@movie.Id" />
-                                                        <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
-                                                        <button type="submit" class="btn btn-sm btn-primary">
-                                                            Keep This Copy (@(movie.FileSizeBytes / (1024 * 1024)) MB)
-                                                        </button>
-                                                    </form>
-                                                </div>
+                                                <p class="mb-2">
+                                                    This file name is unusually long (@(movie.FileName?.Length ?? 0) characters), which can mean a sample, a bundle, or a mislabeled file.
+                                                    Check the file, then use <strong>Confirm name</strong>.
+                                                </p>
                                             }
                                             @if (movie.HasMetadataSuggestion)
                                             {
-                                                <div class="mt-2 p-2 bg-light border rounded">
-                                                    <div>
-                                                        <strong>Suggested match:</strong>
-                                                        @movie.SuggestedTitle (@(movie.SuggestedYear?.ToString() ?? "year unknown")) — @movie.SuggestedImdbId
-                                                    </div>
-                                                    @if (movie.CanAcceptMetadataSuggestion)
+                                                <p class="mb-2">
+                                                    <strong>Suggested match:</strong>
+                                                    @movie.SuggestedTitle (@(movie.SuggestedYear?.ToString() ?? "year unknown")), @movie.SuggestedImdbId
+                                                    @if (!movie.CanAcceptMetadataSuggestion)
                                                     {
-                                                        <form method="post" asp-page-handler="AcceptSuggestedMatch" class="mt-1">
-                                                            @Html.AntiForgeryToken()
-                                                            <input type="hidden" name="movieId" value="@movie.Id" />
-                                                            <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
-                                                            <button type="submit" class="btn btn-sm btn-primary">
-                                                                Accept Suggested Match
-                                                            </button>
-                                                        </form>
+                                                        <br />
+                                                        <span>OMDb did not provide a release year, so this suggestion cannot be accepted safely.</span>
                                                     }
-                                                    else
+                                                </p>
+                                            }
+                                            <dl class="row mb-0">
+                                                <dt class="col-sm-4">Identity</dt>
+                                                <dd class="col-sm-8">
+                                                    @(string.IsNullOrWhiteSpace(movie.Title) ? "Unknown title" : movie.Title)
+                                                    (@(movie.Year?.ToString() ?? "year unknown"))
+                                                </dd>
+                                                <dt class="col-sm-4">IMDb ID</dt>
+                                                <dd class="col-sm-8">@(string.IsNullOrWhiteSpace(movie.ImdbId) ? "Not determined" : movie.ImdbId)</dd>
+                                                <dt class="col-sm-4">Edition</dt>
+                                                <dd class="col-sm-8">@(string.IsNullOrWhiteSpace(movie.VersionTag) ? "Standard" : movie.VersionTag)</dd>
+                                                <dt class="col-sm-4">This file</dt>
+                                                <dd class="col-sm-8">
+                                                    @(movie.SourceResolution ?? "resolution not in file name"),
+                                                    @PIM.Core.Models.VideoResolution.FormatSize(movie.FileSizeBytes)
+                                                </dd>
+                                                @if (movie.MatchConfidence.HasValue)
+                                                {
+                                                    <dt class="col-sm-4">Match confidence</dt>
+                                                    <dd class="col-sm-8">@movie.MatchConfidence.Value.ToString("0")%</dd>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(movie.MetadataLookupFailureDetail))
+                                                {
+                                                    <dt class="col-sm-4">Lookup detail</dt>
+                                                    <dd class="col-sm-8">@movie.MetadataLookupFailureDetail</dd>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(movie.MetadataDiscoveryReason))
+                                                {
+                                                    <dt class="col-sm-4">How it was found</dt>
+                                                    <dd class="col-sm-8">@movie.MetadataDiscoveryReason</dd>
+                                                }
+                                            </dl>
+                                        </div>
+
+                                        <div class="col-lg-6">
+                                            @if (showPlex)
+                                            {
+                                                <div class="border rounded p-2 mb-2 bg-white">
+                                                    <div class="fw-semibold">
+                                                        @(movie.NeedsPlexDuplicateDecision
+                                                            ? "Possible duplicate: your decision"
+                                                            : movie.IsPlexDuplicateAccepted
+                                                                ? "Possible duplicate: you chose to add it"
+                                                                : movie.IsPlexTrackedMigration
+                                                                    ? "Plex tracks this file"
+                                                                    : "Plex library conflict")
+                                                    </div>
+                                                    <div>
+                                                        @(movie.IsPlexTrackedMigration
+                                                            ? movie.PlexTrackedMigrationReason
+                                                            : movie.PlexLibraryConflictReason)
+                                                    </div>
+                                                    @if (!string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath))
                                                     {
-                                                        <div class="mt-1">OMDb did not provide a release year, so this suggestion cannot be accepted safely.</div>
+                                                        <div class="text-break mt-1">
+                                                            <span class="text-muted">Plex copy:</span>
+                                                            @(movie.ExistingPlexResolution ?? "resolution unknown"),
+                                                            @PIM.Core.Models.VideoResolution.FormatSize(movie.ExistingPlexSizeBytes),
+                                                            @movie.ExistingPlexLibraryPath
+                                                        </div>
+                                                        <div>
+                                                            <span class="text-muted">This file:</span>
+                                                            @(movie.SourceResolution ?? "resolution not in file name"),
+                                                            @PIM.Core.Models.VideoResolution.FormatSize(movie.FileSizeBytes)
+                                                        </div>
+                                                    }
+                                                    @if (movie.NeedsPlexDuplicateDecision)
+                                                    {
+                                                        <div class="mt-1">
+                                                            This file is <strong>skipped</strong> unless you choose <strong>Add anyway</strong>.
+                                                            Adding it moves it to the proposed path and Plex will then have both copies. Nothing is deleted.
+                                                        </div>
+                                                    }
+                                                    @if (movie.IsPlexDuplicateAccepted)
+                                                    {
+                                                        <div class="mt-1">Plex will have both copies after the move. Nothing is deleted. Use <strong>Undo add</strong> to skip it again.</div>
                                                     }
                                                 </div>
                                             }
-                                            @if (movie.CanEnterImdbId)
+                                            @if (movie.HasDestinationConflict)
                                             {
-                                                <form method="post" asp-page-handler="SetImdbId" class="mt-2 p-2 bg-light border rounded">
+                                                <div class="border rounded p-2 mb-2 bg-white">
+                                                    <div class="fw-semibold">Destination conflict</div>
+                                                    <div>@movie.DestinationConflictReason</div>
+                                                    @if (!string.IsNullOrWhiteSpace(movie.ExistingDestinationPath))
+                                                    {
+                                                        <div class="text-break"><span class="text-muted">Existing:</span> @movie.ExistingDestinationPath</div>
+                                                    }
+                                                </div>
+                                            }
+                                            <div class="fw-semibold">Paths</div>
+                                            <div class="text-break"><span class="text-muted">From:</span> @movie.OriginalFilePath</div>
+                                            <div class="text-break">
+                                                <span class="text-muted">To:</span>
+                                                @(string.IsNullOrWhiteSpace(movie.TargetPath) ? "No destination until the identity is confirmed" : movie.TargetPath)
+                                            </div>
+                                            @if (row.CanEnterImdbId)
+                                            {
+                                                <form method="post" asp-page-handler="SetImdbId" class="mt-2 p-2 bg-white border rounded">
                                                     @Html.AntiForgeryToken()
                                                     <input type="hidden" name="movieId" value="@movie.Id" />
-                                                    <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
+                                                    <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
                                                     <label class="form-label mb-1" for="imdb-@movie.Id">
                                                         @(movie.HasMetadataSuggestion ? "Not the right movie? Enter its IMDb ID:" : "Know the movie? Enter its IMDb ID:")
                                                     </label>
@@ -954,123 +1037,13 @@
                                                 </form>
                                             }
                                         </div>
-                                    }
-
-                                    @if (movie.HasDestinationConflict)
-                                    {
-                                        <div class="alert alert-warning mt-1 mb-0 p-2" style="font-size:0.8em;">
-                                            <strong>Destination Conflict</strong>
-                                            <div><strong>Reason:</strong> @movie.DestinationConflictReason</div>
-                                            @if (!string.IsNullOrWhiteSpace(movie.ExistingDestinationPath))
-                                            {
-                                                <div class="text-break">
-                                                    <strong>Existing Path:</strong> @movie.ExistingDestinationPath
-                                                </div>
-                                            }
-                                            @if (!string.IsNullOrWhiteSpace(movie.TargetPath))
-                                            {
-                                                <div class="text-break">
-                                                    <strong>Proposed Path:</strong> @movie.TargetPath
-                                                </div>
-                                            }
-                                        </div>
-                                    }
-
-                                    @if (movie.HasPlexLibraryConflict || movie.IsPlexDuplicateAccepted)
-                                    {
-                                        <div class="alert @(movie.IsPlexDuplicateAccepted ? "alert-success" : "alert-info") mt-1 mb-0 p-2" style="font-size:0.8em;">
-                                            <strong>
-                                                @(movie.NeedsPlexDuplicateDecision
-                                                    ? "Possible duplicate — your decision"
-                                                    : movie.IsPlexDuplicateAccepted
-                                                        ? "Possible duplicate — you chose to add it"
-                                                        : "Plex Library Conflict")
-                                            </strong>
-                                            <div><strong>Reason:</strong> @movie.PlexLibraryConflictReason</div>
-                                            @if (!string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath))
-                                            {
-                                                <div class="text-break">
-                                                    <strong>Existing Plex Path:</strong> @movie.ExistingPlexLibraryPath
-                                                </div>
-                                                <div>
-                                                    <strong>Plex copy:</strong> @(movie.ExistingPlexResolution ?? "resolution unknown"), @PIM.Core.Models.VideoResolution.FormatSize(movie.ExistingPlexSizeBytes)
-                                                </div>
-                                                <div>
-                                                    <strong>This file:</strong> @(movie.SourceResolution ?? "resolution not in file name"), @PIM.Core.Models.VideoResolution.FormatSize(movie.FileSizeBytes)
-                                                </div>
-                                            }
-                                            @if (!string.IsNullOrWhiteSpace(movie.TargetPath))
-                                            {
-                                                <div class="text-break">
-                                                    <strong>Proposed Path:</strong> @movie.TargetPath
-                                                </div>
-                                            }
-                                            @if (movie.NeedsPlexDuplicateDecision)
-                                            {
-                                                <div class="mt-2">
-                                                    This file will be <strong>skipped</strong> unless you choose to add it.
-                                                    Adding it moves it to the proposed path and Plex will then have both copies. Nothing is deleted.
-                                                </div>
-                                                <form method="post" asp-page-handler="AddPlexDuplicate" class="mt-1">
-                                                    @Html.AntiForgeryToken()
-                                                    <input type="hidden" name="movieId" value="@movie.Id" />
-                                                    <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
-                                                    <button type="submit" class="btn btn-sm btn-outline-primary">
-                                                        Add Anyway (keep both)
-                                                    </button>
-                                                </form>
-                                            }
-                                            @if (movie.IsPlexDuplicateAccepted)
-                                            {
-                                                <div class="mt-2">Plex will have both copies after the move. Nothing is deleted.</div>
-                                                <form method="post" asp-page-handler="UndoPlexDuplicate" class="mt-1">
-                                                    @Html.AntiForgeryToken()
-                                                    <input type="hidden" name="movieId" value="@movie.Id" />
-                                                    <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
-                                                    <button type="submit" class="btn btn-sm btn-outline-secondary">
-                                                        Undo — skip this file
-                                                    </button>
-                                                </form>
-                                            }
-                                        </div>
-                                    }
-
-                                    @if (movie.IsPlexTrackedMigration)
-                                    {
-                                        <div class="alert alert-success mt-1 mb-0 p-2" style="font-size:0.8em;">
-                                            <strong>Plex-tracked migration</strong>
-                                            <div>@movie.PlexTrackedMigrationReason</div>
-                                            @if (!string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath))
-                                            {
-                                                <div class="text-break">
-                                                    <strong>Existing Plex Path:</strong>
-                                                    @movie.ExistingPlexLibraryPath
-                                                </div>
-                                                <div>
-                                                    <strong>Plex copy:</strong> @(movie.ExistingPlexResolution ?? "resolution unknown"), @PIM.Core.Models.VideoResolution.FormatSize(movie.ExistingPlexSizeBytes)
-                                                </div>
-                                            }
-                                        </div>
-                                    }
-                                </td>
-
-                                <td style="font-size:0.8em; color:#666;">
-                                    <div style="font-weight:bold;">OLD</div>
-                                    @movie.OriginalFilePath
-                                </td>
-
-                                <td>
-                                    <div style="color:green; font-weight:bold;">NEW</div>
-                                    <div style="font-size:0.85em;">
-                                        @movie.TargetPath
                                     </div>
                                 </td>
-
                             </tr>
                         }
                     </tbody>
                 </table>
-            </div>
+            }
         </div>
 
         @if (Model.Movies.Any())
@@ -1204,9 +1177,10 @@
             });
         }
         // =====================================================
-        // 🎬 MOVIE RESULTS CARD FILTERING
+        // 🎬 MOVIE RESULTS: FILTERS, DETAILS, AND PLACE KEEPING
         // =====================================================
-        let activeMovieFilter = null;
+        const movieFilterStorageKey = "pim.movieFilter";
+        const moviePositionStorageKey = "pim.movieResultsPosition";
 
         const movieFilterCards =
             document.querySelectorAll(".movie-filter-card");
@@ -1217,45 +1191,190 @@
         const movieFilterStatus =
             document.getElementById("movieFilterStatus");
 
-        movieFilterCards.forEach(function (card) {
-            card.addEventListener("click", function () {
-                const selectedFilter = card.dataset.movieFilter;
+        const movieFilterContainer =
+            document.getElementById("movieFilterCards");
 
-                activeMovieFilter =
-                    activeMovieFilter === selectedFilter
-                        ? null
-                        : selectedFilter;
+        let activeMovieFilter = null;
 
-                movieFilterCards.forEach(function (candidate) {
-                    const isActive =
-                        candidate.dataset.movieFilter === activeMovieFilter;
-                    candidate.classList.toggle("border-primary", isActive);
-                    candidate.classList.toggle("shadow", isActive);
-                    candidate.setAttribute("aria-pressed", isActive.toString());
-                });
+        // Browser storage can be unavailable (private mode, blocked site
+        // data); the page must still work without it.
+        function readStoredValue(key) {
+            try {
+                return window.sessionStorage.getItem(key);
+            } catch {
+                return null;
+            }
+        }
 
-                let visibleCount = 0;
+        function writeStoredValue(key, value) {
+            try {
+                if (value === null) {
+                    window.sessionStorage.removeItem(key);
+                } else {
+                    window.sessionStorage.setItem(key, value);
+                }
+            } catch {
+                // Remembering the view is a convenience only.
+            }
+        }
 
-                movieRows.forEach(function (row) {
-                    const isVisible =
-                        activeMovieFilter === null ||
-                        row.dataset.movieCategory === activeMovieFilter;
-                    row.hidden = !isVisible;
+        function detailsToggleFor(detailsId) {
+            return document.querySelector(`[data-toggle-details="${detailsId}"]`);
+        }
 
-                    if (isVisible) {
-                        visibleCount++;
-                    }
-                });
+        function setDetailsOpen(toggle, open) {
+            const details = document.getElementById(toggle.dataset.toggleDetails);
 
-                if (movieFilterStatus) {
-                    movieFilterStatus.textContent =
-                        activeMovieFilter === null
-                            ? "Showing all movie results."
-                            : `Showing ${visibleCount} movie result(s). ` +
-                              "Select the active card again to clear the filter.";
+            if (!details) {
+                return;
+            }
+
+            details.hidden = !open;
+            toggle.setAttribute("aria-expanded", open.toString());
+            toggle.textContent = open ? "Hide details" : "Details";
+        }
+
+        function countRows(filter) {
+            return document.querySelectorAll(
+                `.movie-results-row[data-movie-category="${filter}"]`).length;
+        }
+
+        function applyMovieFilter(filter) {
+            activeMovieFilter = filter;
+
+            movieFilterCards.forEach(function (card) {
+                const isActive = card.dataset.movieFilter === filter;
+                card.classList.toggle("border-primary", isActive);
+                card.classList.toggle("shadow-sm", isActive);
+                card.setAttribute("aria-pressed", isActive.toString());
+            });
+
+            let visibleCount = 0;
+
+            movieRows.forEach(function (row) {
+                const isVisible =
+                    filter === null ||
+                    row.dataset.movieCategory === filter;
+                const toggle = detailsToggleFor(row.dataset.detailsId);
+                const details = document.getElementById(row.dataset.detailsId);
+
+                row.hidden = !isVisible;
+
+                if (details) {
+                    details.hidden =
+                        !isVisible ||
+                        toggle?.getAttribute("aria-expanded") !== "true";
+                }
+
+                if (isVisible) {
+                    visibleCount++;
                 }
             });
+
+            if (movieFilterStatus) {
+                movieFilterStatus.textContent =
+                    filter === null
+                        ? `Showing all ${movieRows.length} movies.`
+                        : `Showing ${visibleCount} of ${movieRows.length} movies. ` +
+                          "Select the highlighted card again, or Show all, to see everything.";
+            }
+
+            writeStoredValue(movieFilterStorageKey, filter ?? "all");
+        }
+
+        movieFilterCards.forEach(function (card) {
+            card.addEventListener("click", function () {
+                const selected = card.dataset.movieFilter;
+                applyMovieFilter(activeMovieFilter === selected ? null : selected);
+            });
         });
+
+        document.getElementById("movieFilterShowAll")
+            ?.addEventListener("click", function () {
+                applyMovieFilter(null);
+            });
+
+        document.querySelectorAll("[data-toggle-details]").forEach(function (toggle) {
+            toggle.addEventListener("click", function () {
+                setDetailsOpen(
+                    toggle,
+                    toggle.getAttribute("aria-expanded") !== "true");
+            });
+        });
+
+        document.querySelectorAll("[data-open-details]").forEach(function (button) {
+            button.addEventListener("click", function () {
+                const toggle = detailsToggleFor(button.dataset.openDetails);
+
+                if (toggle) {
+                    setDetailsOpen(toggle, true);
+                }
+
+                document.getElementById(button.dataset.focus)?.focus();
+            });
+        });
+
+        // After a row action posts back, return to the same place with the
+        // same details open instead of jumping to the top of the page.
+        document.querySelectorAll("#movies-pane form").forEach(function (form) {
+            form.addEventListener("submit", function () {
+                const openDetails = Array.from(
+                    document.querySelectorAll("[data-toggle-details][aria-expanded='true']"))
+                    .map(function (toggle) { return toggle.dataset.toggleDetails; });
+
+                writeStoredValue(
+                    moviePositionStorageKey,
+                    JSON.stringify({ y: window.scrollY, openDetails: openDetails }));
+            });
+        });
+
+        if (movieRows.length > 0) {
+            // Open on "Your decision" when there is anything to decide, unless
+            // the owner picked a view earlier in this browser tab.
+            const defaultFilter = movieFilterContainer?.dataset.defaultFilter ?? "all";
+            let initialFilter = readStoredValue(movieFilterStorageKey) ?? defaultFilter;
+
+            if (initialFilter !== "all" && countRows(initialFilter) === 0) {
+                initialFilter = defaultFilter;
+            }
+
+            applyMovieFilter(initialFilter === "all" ? null : initialFilter);
+
+            const savedPosition = readStoredValue(moviePositionStorageKey);
+
+            if (savedPosition) {
+                writeStoredValue(moviePositionStorageKey, null);
+
+                try {
+                    const position = JSON.parse(savedPosition);
+
+                    (position.openDetails || []).forEach(function (detailsId) {
+                        const toggle = detailsToggleFor(detailsId);
+                        const row = document.querySelector(`[data-details-id="${detailsId}"]`);
+
+                        if (toggle && row && !row.hidden) {
+                            setDetailsOpen(toggle, true);
+                        }
+                    });
+
+                    // Scroll after the page has fully loaded; the browser's own
+                    // scroll handling on load would otherwise undo it.
+                    const restoreScroll = function () {
+                        window.requestAnimationFrame(function () {
+                            window.scrollTo(0, position.y || 0);
+                        });
+                    };
+
+                    if (document.readyState === "complete") {
+                        restoreScroll();
+                    } else {
+                        window.addEventListener("load", restoreScroll, { once: true });
+                    }
+                } catch {
+                    // Ignore an unreadable saved position.
+                }
+            }
+        }
 
         // =====================================================
         // 🧪 DRY RUN PREVIEW CARD FILTERING

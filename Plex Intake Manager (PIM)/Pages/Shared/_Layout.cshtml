@@ -1,3 +1,7 @@
+@{
+    // Pages can opt in to the full browser width (the scan results need it).
+    var containerClass = ViewData["FullWidth"] is true ? "container-fluid px-4" : "container";
+}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,7 +15,7 @@
 <body>
     <header>
         <nav class="navbar navbar-expand-sm navbar-toggleable-sm navbar-light bg-white border-bottom box-shadow mb-3">
-            <div class="container">
+            <div class="@containerClass">
                 <a class="navbar-brand" asp-area="" asp-page="/Index">Plex Integrity Manager</a>
                 <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target=".navbar-collapse" aria-controls="navbarSupportedContent"
                         aria-expanded="false" aria-label="Toggle navigation">
@@ -33,14 +37,14 @@
             </div>
         </nav>
     </header>
-    <div class="container">
+    <div class="@containerClass">
         <main role="main" class="pb-3">
             @RenderBody()
         </main>
     </div>
 
     <footer class="border-top footer text-muted">
-        <div class="container">
+        <div class="@containerClass">
             &copy; 2026 - Plex Integrity Manager - <a asp-area="" asp-page="/Privacy">Privacy</a>
         </div>
     </footer>
