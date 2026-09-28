@@ -34,6 +34,10 @@ namespace PIM.Infrastructure.Parsing
             movie.IsAlternateVersion = false;
             movie.CandidateYears.Clear();
 
+            // Kept for comparison with an existing Plex copy before the tag is
+            // stripped from the lookup title below.
+            movie.SourceResolution = VideoResolution.FromFileName(name);
+
             // =========================================================
             // Detect IMDb ID first
             //

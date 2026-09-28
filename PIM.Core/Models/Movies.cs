@@ -240,6 +240,12 @@ namespace PIM.Core.Models
 
         public string? ExistingPlexLibraryPath { get; set; }
 
+        /// <summary>Resolution Plex reports for the existing copy, e.g. "1080p".</summary>
+        public string? ExistingPlexResolution { get; set; }
+
+        /// <summary>File size Plex reports for the existing copy.</summary>
+        public long? ExistingPlexSizeBytes { get; set; }
+
         public bool IsPlexTrackedMigration { get; set; }
 
         public string? PlexTrackedMigrationReason { get; set; }
@@ -336,6 +342,12 @@ namespace PIM.Core.Models
         public string? FileName { get; set; }
 
         public long FileSizeBytes { get; set; }
+
+        /// <summary>
+        /// Resolution read from the file name ("1080p", "4K"), or null. A hint
+        /// for comparison with an existing Plex copy; the video is not inspected.
+        /// </summary>
+        public string? SourceResolution { get; set; }
 
         public string? OriginalPath => OriginalFilePath;
 

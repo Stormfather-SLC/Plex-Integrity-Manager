@@ -115,6 +115,8 @@ namespace PIM.Infrastructure.Services
                     movie.IsPlexTrackedMigration = true;
                     movie.PlexTrackedMigrationReason = plexPolicy.Message;
                     movie.ExistingPlexLibraryPath = plexResult.ExistingPath;
+                    movie.ExistingPlexResolution = plexResult.ExistingResolution;
+                    movie.ExistingPlexSizeBytes = plexResult.ExistingSizeBytes;
                 }
                 else if (plexResult.HasConflict)
                 {
@@ -122,6 +124,8 @@ namespace PIM.Infrastructure.Services
                     movie.PlexLibraryConflictReason = plexPolicy?.Message ??
                                                       plexResult.Message;
                     movie.ExistingPlexLibraryPath = plexResult.ExistingPath;
+                    movie.ExistingPlexResolution = plexResult.ExistingResolution;
+                    movie.ExistingPlexSizeBytes = plexResult.ExistingSizeBytes;
                 }
 
                 if (movie.HasDestinationConflict || movie.HasPlexLibraryConflict)
@@ -262,6 +266,8 @@ namespace PIM.Infrastructure.Services
             movie.HasPlexLibraryConflict = false;
             movie.PlexLibraryConflictReason = null;
             movie.ExistingPlexLibraryPath = null;
+            movie.ExistingPlexResolution = null;
+            movie.ExistingPlexSizeBytes = null;
             movie.IsPlexTrackedMigration = false;
             movie.PlexTrackedMigrationReason = null;
 
