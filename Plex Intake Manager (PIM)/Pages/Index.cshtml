@@ -521,7 +521,11 @@
                                     @if (item.HasPlexLibraryConflict)
                                     {
                                         <div class="alert alert-info mt-2 mb-0 p-2" style="font-size:0.85em;">
-                                            <div class="fw-bold">Plex Library Conflict</div>
+                                            <div class="fw-bold">
+                                                @(item.NeedsPlexDuplicateDecision
+                                                    ? "Possible duplicate — decide on the Movie Results tab"
+                                                    : "Plex Library Conflict")
+                                            </div>
 
                                             <div>
                                                 <strong>Reason:</strong>
@@ -549,6 +553,20 @@
                                                     <div class="text-break">@item.TargetPath</div>
                                                 </div>
                                             }
+                                        </div>
+                                    }
+
+                                    @if (item.IsPlexDuplicateAccepted)
+                                    {
+                                        <div class="alert alert-success mt-2 mb-0 p-2" style="font-size:0.85em;">
+                                            <div class="fw-bold">Adding alongside the existing Plex copy (your decision)</div>
+                                            <div class="text-break"><strong>Existing Plex Path:</strong> @item.ExistingPlexLibraryPath</div>
+                                            <div>
+                                                <strong>Plex copy:</strong> @(item.ExistingPlexResolution ?? "resolution unknown"), @PIM.Core.Models.VideoResolution.FormatSize(item.ExistingPlexSizeBytes)
+                                            </div>
+                                            <div>
+                                                <strong>This file:</strong> @(item.SourceResolution ?? "resolution not in file name"), @PIM.Core.Models.VideoResolution.FormatSize(item.SourceSizeBytes)
+                                            </div>
                                         </div>
                                     }
 
@@ -958,10 +976,16 @@
                                         </div>
                                     }
 
-                                    @if (movie.HasPlexLibraryConflict)
+                                    @if (movie.HasPlexLibraryConflict || movie.IsPlexDuplicateAccepted)
                                     {
-                                        <div class="alert alert-info mt-1 mb-0 p-2" style="font-size:0.8em;">
-                                            <strong>Plex Library Conflict</strong>
+                                        <div class="alert @(movie.IsPlexDuplicateAccepted ? "alert-success" : "alert-info") mt-1 mb-0 p-2" style="font-size:0.8em;">
+                                            <strong>
+                                                @(movie.NeedsPlexDuplicateDecision
+                                                    ? "Possible duplicate — your decision"
+                                                    : movie.IsPlexDuplicateAccepted
+                                                        ? "Possible duplicate — you chose to add it"
+                                                        : "Plex Library Conflict")
+                                            </strong>
                                             <div><strong>Reason:</strong> @movie.PlexLibraryConflictReason</div>
                                             @if (!string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath))
                                             {
@@ -980,6 +1004,33 @@
                                                 <div class="text-break">
                                                     <strong>Proposed Path:</strong> @movie.TargetPath
                                                 </div>
+                                            }
+                                            @if (movie.NeedsPlexDuplicateDecision)
+                                            {
+                                                <div class="mt-2">
+                                                    This file will be <strong>skipped</strong> unless you choose to add it.
+                                                    Adding it moves it to the proposed path and Plex will then have both copies. Nothing is deleted.
+                                                </div>
+                                                <form method="post" asp-page-handler="AddPlexDuplicate" class="mt-1">
+                                                    @Html.AntiForgeryToken()
+                                                    <input type="hidden" name="movieId" value="@movie.Id" />
+                                                    <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
+                                                    <button type="submit" class="btn btn-sm btn-outline-primary">
+                                                        Add Anyway (keep both)
+                                                    </button>
+                                                </form>
+                                            }
+                                            @if (movie.IsPlexDuplicateAccepted)
+                                            {
+                                                <div class="mt-2">Plex will have both copies after the move. Nothing is deleted.</div>
+                                                <form method="post" asp-page-handler="UndoPlexDuplicate" class="mt-1">
+                                                    @Html.AntiForgeryToken()
+                                                    <input type="hidden" name="movieId" value="@movie.Id" />
+                                                    <input type="hidden" name="ShowOnlyRecommended" value="@Model.ShowOnlyRecommended.ToString().ToLowerInvariant()" />
+                                                    <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                                        Undo — skip this file
+                                                    </button>
+                                                </form>
                                             }
                                         </div>
                                     }

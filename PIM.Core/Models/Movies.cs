@@ -248,6 +248,35 @@ namespace PIM.Core.Models
 
         public bool IsPlexTrackedMigration { get; set; }
 
+        /// <summary>
+        /// Plex has what looks like the same movie as a different file. Set by
+        /// conflict detection on every plan rebuild.
+        /// </summary>
+        public bool IsPossiblePlexDuplicate { get; set; }
+
+        /// <summary>
+        /// The existing Plex path the user chose to add this file alongside.
+        /// The choice only applies while Plex still reports that same path.
+        /// </summary>
+        public string? PlexDuplicateAcceptedPath { get; set; }
+
+        public bool HasAcceptedPlexDuplicate(string? existingPlexPath) =>
+            !string.IsNullOrWhiteSpace(PlexDuplicateAcceptedPath) &&
+            string.Equals(
+                PlexDuplicateAcceptedPath,
+                existingPlexPath,
+                StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>A possible duplicate awaiting the user's decision.</summary>
+        public bool NeedsPlexDuplicateDecision =>
+            IsPossiblePlexDuplicate && HasPlexLibraryConflict;
+
+        /// <summary>A possible duplicate the user chose to add anyway.</summary>
+        public bool IsPlexDuplicateAccepted =>
+            IsPossiblePlexDuplicate &&
+            !HasPlexLibraryConflict &&
+            HasAcceptedPlexDuplicate(ExistingPlexLibraryPath);
+
         public string? PlexTrackedMigrationReason { get; set; }
 
         // =========================================================

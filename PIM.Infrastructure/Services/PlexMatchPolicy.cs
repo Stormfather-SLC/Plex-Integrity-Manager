@@ -9,10 +9,16 @@ public enum PlexPathRelationship
     OutsideSource
 }
 
+/// <param name="IsTrackedMigration">Proceed: this is the file Plex tracks.</param>
+/// <param name="IsDuplicateDecision">
+/// A possible duplicate the user decides on (skip by default, or add anyway).
+/// When both flags are false the Plex result is a hard stop.
+/// </param>
 public sealed record PlexMatchPolicyDecision(
     bool IsTrackedMigration,
     string Message,
-    PlexPathRelationship PathRelationship);
+    PlexPathRelationship PathRelationship,
+    bool IsDuplicateDecision = false);
 
 public static class PlexMatchPolicy
 {
@@ -27,33 +33,44 @@ public static class PlexMatchPolicy
 
         var originalMessage = plexResult.Message ??
                               "A Plex library conflict was detected.";
-
-        if (libraryGoal != LibraryGoal.ReorganizationMigration ||
-            !IsVerifiedImdbMatch(movie, plexResult))
-        {
-            return new PlexMatchPolicyDecision(
-                false,
-                originalMessage,
-                PlexPathRelationship.Indeterminate);
-        }
-
         var relationship = GetPathRelationship(
             sourceRoot,
             plexResult.ExistingPath);
 
-        var location = relationship switch
+        // Moving the very file Plex tracks is what Reorganize / Migrate is for.
+        // In the other workflows it is not a new movie, so it stays blocked.
+        if (plexResult.ConflictType == PlexLibraryConflictType.TracksThisFile)
         {
-            PlexPathRelationship.InsideSource => "inside the selected source tree",
-            PlexPathRelationship.OutsideSource => "outside the selected source tree",
-            _ => "at a path whose relationship to the source tree could not be determined"
-        };
+            return libraryGoal == LibraryGoal.ReorganizationMigration &&
+                   !string.IsNullOrWhiteSpace(movie.ImdbId)
+                ? new PlexMatchPolicyDecision(
+                    true,
+                    $"Plex tracks this exact file (IMDb {movie.ImdbId}). Moving it reorganizes the file Plex already knows; Plex finds it at the new location on its next library scan.",
+                    relationship)
+                : new PlexMatchPolicyDecision(
+                    false,
+                    $"{originalMessage} Use the Reorganize / Migrate workflow to move a file Plex already tracks.",
+                    relationship);
+        }
 
-        // In the migration workflow, a verified same-IMDb Plex entry is useful
-        // read-only awareness, not a conflict by itself. Destination collisions,
-        // ambiguous identity, duplicates, and every other safety check still apply.
+        // Same movie as a different file: it may be a better or different
+        // version, so the user decides. Consolidation exists to avoid adding
+        // copies, so it keeps these blocked.
+        if (plexResult.IsPossibleDuplicate &&
+            libraryGoal != LibraryGoal.Consolidation)
+        {
+            return new PlexMatchPolicyDecision(
+                false,
+                $"Possible duplicate. {originalMessage}",
+                relationship,
+                IsDuplicateDecision: true);
+        }
+
+        // Target-path collisions, identity mismatches, and failed Plex checks
+        // are hard stops in every workflow.
         return new PlexMatchPolicyDecision(
-            true,
-            $"Plex awareness: Plex contains IMDb {movie.ImdbId} {location}. This does not block the selected migration workflow by itself.",
+            false,
+            originalMessage,
             relationship);
     }
 
@@ -85,19 +102,6 @@ public static class PlexMatchPolicy
             StringComparison.OrdinalIgnoreCase)
             ? PlexPathRelationship.InsideSource
             : PlexPathRelationship.OutsideSource;
-    }
-
-    private static bool IsVerifiedImdbMatch(
-        Movie movie,
-        PlexLibraryConflictResult plexResult)
-    {
-        if (string.IsNullOrWhiteSpace(movie.ImdbId))
-            return false;
-
-        return plexResult.ConflictType is
-            PlexLibraryConflictType.AlreadyExistsAtTargetPath or
-            PlexLibraryConflictType.SameImdbIdDifferentPath or
-            PlexLibraryConflictType.ExistingAlternateVersion;
     }
 
     private static bool TryNormalizeFullyQualifiedPath(

@@ -46,8 +46,29 @@ public sealed class LibraryGoalPlexPolicyTests
             LibraryGoal.OrganizeNewMovies);
 
         Assert.True(movie.HasPlexLibraryConflict);
+        Assert.True(movie.NeedsPlexDuplicateDecision);
         Assert.True(movie.NeedsReview);
         Assert.False(movie.ApprovedForCommit);
+    }
+
+    [Fact]
+    public void OrganizeNewMovies_BlocksTheFilePlexAlreadyTracksWithoutADecision()
+    {
+        var movie = CreateMovie();
+        var detector = CreateDetector(TracksThisFile(movie));
+
+        detector.ApplyConflictDetection(
+            new List<Movie> { movie },
+            @"X:\PIM\Destination",
+            SourceRoot,
+            LibraryGoal.OrganizeNewMovies);
+
+        Assert.True(movie.HasPlexLibraryConflict);
+        Assert.False(movie.IsPossiblePlexDuplicate);
+        Assert.False(movie.IsPlexTrackedMigration);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Contains("Reorganize / Migrate", movie.PlexLibraryConflictReason);
     }
 
     [Fact]
@@ -71,11 +92,11 @@ public sealed class LibraryGoalPlexPolicyTests
     }
 
     [Fact]
-    public void Reorganization_AllowsPlexMatchInsideSourceRoot()
+    public void Reorganization_AllowsTheFilePlexAlreadyTracks()
     {
         var movie = CreateMovie();
         var detector = CreateDetector(
-            PlexMatch(InsidePlexPath));
+            TracksThisFile(movie));
 
         detector.ApplyConflictDetection(
             new List<Movie> { movie },
@@ -87,18 +108,20 @@ public sealed class LibraryGoalPlexPolicyTests
         Assert.True(movie.IsPlexTrackedMigration);
         Assert.False(movie.NeedsReview);
         Assert.True(movie.ApprovedForCommit);
-        Assert.Equal(InsidePlexPath, movie.ExistingPlexLibraryPath);
+        Assert.Equal(movie.OriginalFilePath, movie.ExistingPlexLibraryPath);
         Assert.Contains(
-            "Plex awareness",
+            "Plex tracks this exact file",
             movie.PlexTrackedMigrationReason);
     }
 
-    [Fact]
-    public void Reorganization_AllowsPlexMatchOutsideSourceRootAsAwareness()
+    [Theory]
+    [InlineData(OutsidePlexPath)]
+    [InlineData(InsidePlexPath)]
+    public void Reorganization_SameMovieAsAnotherFile_WaitsForTheUsersDecision(string plexPath)
     {
         var movie = CreateMovie();
         var detector = CreateDetector(
-            PlexMatch(OutsidePlexPath));
+            PlexMatch(plexPath));
 
         detector.ApplyConflictDetection(
             new List<Movie> { movie },
@@ -106,14 +129,14 @@ public sealed class LibraryGoalPlexPolicyTests
             SourceRoot,
             LibraryGoal.ReorganizationMigration);
 
-        Assert.False(movie.HasPlexLibraryConflict);
-        Assert.True(movie.IsPlexTrackedMigration);
-        Assert.False(movie.NeedsReview);
-        Assert.True(movie.ApprovedForCommit);
-        Assert.Contains(
-            "outside the selected source tree",
-            movie.PlexTrackedMigrationReason);
-        Assert.Equal(OutsidePlexPath, movie.ExistingPlexLibraryPath);
+        Assert.True(movie.HasPlexLibraryConflict);
+        Assert.True(movie.IsPossiblePlexDuplicate);
+        Assert.True(movie.NeedsPlexDuplicateDecision);
+        Assert.False(movie.IsPlexTrackedMigration);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.StartsWith("Possible duplicate.", movie.PlexLibraryConflictReason);
+        Assert.Equal(plexPath, movie.ExistingPlexLibraryPath);
     }
 
     [Fact]
@@ -121,7 +144,7 @@ public sealed class LibraryGoalPlexPolicyTests
     {
         var movie = CreateMovie();
         var detector = CreateDetector(
-            PlexMatch(InsidePlexPath),
+            TracksThisFile(movie),
             DestinationConflictResult.Conflict(
                 DestinationConflictType.TargetFileAlreadyExists,
                 "The target already exists.",
@@ -149,7 +172,7 @@ public sealed class LibraryGoalPlexPolicyTests
         movie.RequireReview("Low confidence metadata match (60% confidence)");
 
         var detector = CreateDetector(
-            PlexMatch(InsidePlexPath));
+            TracksThisFile(movie));
 
         detector.ApplyConflictDetection(
             new List<Movie> { movie },
@@ -271,7 +294,7 @@ public sealed class LibraryGoalPlexPolicyTests
         var movie = CreateMovie();
         var originalTitle = movie.Title;
         var detector = CreateDetector(
-            PlexMatch(InsidePlexPath));
+            TracksThisFile(movie));
 
         Evaluate(
             detector,
@@ -310,7 +333,7 @@ public sealed class LibraryGoalPlexPolicyTests
     {
         var movie = CreateMovie();
         var detector = CreateDetector(
-            PlexMatch(InsidePlexPath));
+            TracksThisFile(movie));
 
         // The reviewed dry-run plan allowed an in-source migration.
         Evaluate(
@@ -357,7 +380,7 @@ public sealed class LibraryGoalPlexPolicyTests
     }
 
     [Fact]
-    public void Reorganization_IndeterminatePlexPathIsAwarenessOnlyForVerifiedIdentity()
+    public void Reorganization_SameMovieWithoutAFilesystemPath_WaitsForTheUsersDecision()
     {
         var movie = CreateMovie();
         var detector = CreateDetector(
@@ -369,13 +392,11 @@ public sealed class LibraryGoalPlexPolicyTests
             SourceRoot,
             LibraryGoal.ReorganizationMigration);
 
-        Assert.False(movie.HasPlexLibraryConflict);
-        Assert.True(movie.IsPlexTrackedMigration);
-        Assert.False(movie.NeedsReview);
-        Assert.True(movie.ApprovedForCommit);
-        Assert.Contains(
-            "could not be determined",
-            movie.PlexTrackedMigrationReason);
+        Assert.True(movie.HasPlexLibraryConflict);
+        Assert.True(movie.NeedsPlexDuplicateDecision);
+        Assert.False(movie.IsPlexTrackedMigration);
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
     }
 
     private static void Evaluate(
@@ -422,6 +443,14 @@ public sealed class LibraryGoalPlexPolicyTests
             ApprovedForCommit = true,
             Status = "Rename preview generated"
         };
+    }
+
+    private static PlexLibraryConflictResult TracksThisFile(Movie movie)
+    {
+        return PlexLibraryConflictResult.Conflict(
+            PlexLibraryConflictType.TracksThisFile,
+            "Plex already tracks this exact file as Policy Movie (2024).",
+            movie.OriginalFilePath);
     }
 
     private static PlexLibraryConflictResult PlexMatch(string existingPath)

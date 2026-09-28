@@ -120,6 +120,30 @@ namespace PIM.Infrastructure.Services
                 }
             }
 
+            // Is this the very file Plex already tracks? Then moving it is a
+            // reorganization of Plex's own copy, not an extra copy. Paths must
+            // match exactly as Plex reports them; if Plex sees the drive under
+            // a different path, this falls through to a possible duplicate.
+            var sourcePath = NormalizePath(movie.OriginalFilePath);
+            var sourceEntry = string.IsNullOrWhiteSpace(sourcePath)
+                ? null
+                : _libraryEntries.FirstOrDefault(entry => EntryContainsPath(entry, sourcePath));
+
+            if (sourceEntry != null)
+            {
+                return IdentityMatches(movieImdbId, movieTitle, movie.Year, sourceEntry)
+                    ? ConflictFor(
+                        PlexLibraryConflictType.TracksThisFile,
+                        $"Plex already tracks this exact file as {FormatIdentity(sourceEntry)}.",
+                        sourceEntry,
+                        sourcePath)
+                    : ConflictFor(
+                        PlexLibraryConflictType.LibraryMismatch,
+                        $"Plex tracks this file as a different movie: {FormatIdentity(sourceEntry)}.",
+                        sourceEntry,
+                        sourcePath);
+            }
+
             var imdbMatches = string.IsNullOrWhiteSpace(movieImdbId)
                 ? new List<PlexLibraryEntry>()
                 : _libraryEntries
@@ -582,9 +606,14 @@ namespace PIM.Infrastructure.Services
         private static PlexLibraryConflictResult ConflictFor(
             PlexLibraryConflictType conflictType,
             string message,
-            PlexLibraryEntry entry)
+            PlexLibraryEntry entry,
+            string? preferredPath = null)
         {
-            var file = entry.Files.FirstOrDefault();
+            var file = entry.Files.FirstOrDefault(candidate => string.Equals(
+                           candidate.Path,
+                           preferredPath,
+                           StringComparison.OrdinalIgnoreCase))
+                       ?? entry.Files.FirstOrDefault();
 
             return PlexLibraryConflictResult.Conflict(
                 conflictType,

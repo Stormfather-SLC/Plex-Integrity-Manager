@@ -74,6 +74,10 @@ public class DryRunPreviewItem
 
     public long SourceSizeBytes { get; set; }
 
+    public bool NeedsPlexDuplicateDecision { get; set; }
+
+    public bool IsPlexDuplicateAccepted { get; set; }
+
     public bool IsPlexTrackedMigration { get; set; }
 
     public string PlexTrackedMigrationReason { get; set; } = string.Empty;

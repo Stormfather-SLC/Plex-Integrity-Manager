@@ -743,6 +743,155 @@ public sealed class IndexModelSafetyTests
         Assert.True(File.Exists(target));
     }
 
+    [Fact]
+    public async Task AddPlexDuplicate_InvalidatesAnEarlierDryRunApproval_AndUndoRestoresTheDecision()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        const string plexCopy = @"G:\Plex\Handler Movie (2024)\Handler Movie (2024).mkv";
+        movie.ApprovedForCommit = false;
+        movie.IsPossiblePlexDuplicate = true;
+        movie.HasPlexLibraryConflict = true;
+        movie.ExistingPlexLibraryPath = plexCopy;
+        movie.RequireReview("Plex library conflict: Possible duplicate.");
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var dryRun = CreateModel(store, configuration, profile);
+        dryRun.DryRun = true;
+        await dryRun.OnPostCommitAsync();
+        Assert.NotNull(store.GetDryRunApproval());
+
+        CreateModel(store, configuration, profile).OnPostAddPlexDuplicate(movie.Id);
+
+        Assert.Equal(plexCopy, movie.PlexDuplicateAcceptedPath);
+        Assert.Null(store.GetDryRunApproval());
+        var rename = new RecordingRenameService();
+        var live = CreateModel(store, configuration, profile, rename: rename);
+        live.DryRun = false;
+        await live.OnPostCommitAsync();
+        Assert.Equal(0, rename.ExecuteCount);
+
+        CreateModel(store, configuration, profile).OnPostUndoPlexDuplicate(movie.Id);
+
+        Assert.Null(movie.PlexDuplicateAcceptedPath);
+    }
+
+    [Fact]
+    public void AddPlexDuplicate_RefusesAHardPlexConflict()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var movie = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        movie.ApprovedForCommit = false;
+        movie.HasPlexLibraryConflict = true;
+        movie.IsPossiblePlexDuplicate = false;
+        movie.ExistingPlexLibraryPath = @"G:\Plex\Target.mkv";
+        movie.RequireReview("Plex library conflict: Plex already contains this movie at the proposed target path.");
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+        var plan = new RecordingPlanService();
+        var model = CreateModel(store, configuration, profile, plan: plan);
+
+        model.OnPostAddPlexDuplicate(movie.Id);
+
+        Assert.Null(movie.PlexDuplicateAcceptedPath);
+        Assert.Equal(0, plan.CallCount);
+        Assert.Contains("Nothing was changed", model.TempData["Message"]?.ToString());
+    }
+
+    [Fact]
+    public async Task RealFiles_PossiblePlexDuplicate_MovesOnlyAfterAddAnywayAndANewDryRun()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-PlexDuplicate");
+        Directory.CreateDirectory(workspace.DestinationRoot);
+        Directory.CreateDirectory(workspace.SourceRoot);
+        var sourceFile = Path.Combine(workspace.SourceRoot, "Restart.Movie.2024.2160p.mkv");
+        File.WriteAllText(sourceFile, "new 4K copy");
+        var configuration = CreateConfiguration(
+            workspace,
+            LibraryGoal.OrganizeNewMovies,
+            removeEmptySourceFolders: false);
+        var profile = new DestinationProfile
+        {
+            Name = "Duplicate Decision Profile",
+            DestinationRoot = workspace.DestinationRoot
+        };
+        const string plexCopy = @"G:\Plex\Restart Movie (2024)\Restart Movie (2024).mkv";
+        var plex = new FixedPlexConflictService(PlexLibraryConflictResult.Conflict(
+            PlexLibraryConflictType.SameImdbIdDifferentPath,
+            "Plex already contains IMDb tt7654321 with the same edition at a different path.",
+            plexCopy,
+            "1080p",
+            8_000_000_000));
+        var movie = CreateIdentifiedFileMovie(sourceFile);
+        movie.Title = "Restart Movie";
+        movie.Year = 2024;
+        movie.ImdbId = "tt7654321";
+        var store = CreateStore(configuration);
+        store.SaveMovies(new List<Movie> { movie }, workspace.SourceRoot);
+
+        async Task<IndexModel> CommitAsync(bool dryRun)
+        {
+            var (rename, plan) = CreateRealServices(configuration, plex);
+            var model = CreateModel(store, configuration, profile, rename: rename, plan: plan);
+            model.DryRun = dryRun;
+            await model.OnPostCommitAsync();
+            return model;
+        }
+
+        await CommitAsync(dryRun: true);
+        Assert.True(movie.NeedsPlexDuplicateDecision);
+        Assert.False(movie.ApprovedForCommit);
+
+        // Skipping is the default: a live commit moves nothing.
+        await CommitAsync(dryRun: false);
+        Assert.True(File.Exists(sourceFile));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.DestinationRoot));
+
+        var (addRename, addPlan) = CreateRealServices(configuration, plex);
+        CreateModel(store, configuration, profile, rename: addRename, plan: addPlan)
+            .OnPostAddPlexDuplicate(movie.Id);
+
+        var refused = await CommitAsync(dryRun: false);
+        Assert.Contains("does not have a matching dry-run approval", refused.TempData["Message"]?.ToString());
+        Assert.True(File.Exists(sourceFile));
+
+        await CommitAsync(dryRun: true);
+        Assert.True(movie.IsPlexDuplicateAccepted);
+        Assert.True(movie.ApprovedForCommit);
+        Assert.True(File.Exists(sourceFile));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.DestinationRoot));
+        var target = movie.TargetPath!;
+
+        var live = await CommitAsync(dryRun: false);
+
+        Assert.StartsWith("Changes Applied", live.TempData["Message"]?.ToString());
+        Assert.False(File.Exists(sourceFile));
+        Assert.True(File.Exists(target));
+        var journal = Directory.GetFiles(Path.Combine(workspace.Root, "Journal"), "*live-commit*.jsonl")
+            .OrderBy(file => file)
+            .Last();
+        Assert.Contains(
+            File.ReadAllLines(journal),
+            line => line.Contains("\"Event\":\"Moved\"") &&
+                    line.Contains("alongside the existing Plex copy"));
+    }
+
+    private sealed class FixedPlexConflictService : IPlexLibraryConflictService
+    {
+        private readonly PlexLibraryConflictResult _result;
+
+        public FixedPlexConflictService(PlexLibraryConflictResult result)
+        {
+            _result = result;
+        }
+
+        public PlexLibraryConflictResult Check(Movie movie) => _result;
+    }
+
     private static Movie CreateIdentifiedFileMovie(string file)
     {
         return new Movie
@@ -762,7 +911,8 @@ public sealed class IndexModelSafetyTests
     }
 
     private static (IRenameService Rename, IMoviePlanService Plan) CreateRealServices(
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IPlexLibraryConflictService? plex = null)
     {
         var progress = new ScanProgress();
         var destination = new DestinationConflictService(progress);
@@ -771,10 +921,11 @@ public sealed class IndexModelSafetyTests
             new DestinationPathBuilder(),
             configuration,
             progress,
-            new SourceCleanupStatus());
+            new SourceCleanupStatus(),
+            new JsonLinesOperationJournal(configuration));
         var conflicts = new MovieConflictDetectionService(
             destination,
-            new NoPlexConflictService());
+            plex ?? new NoPlexConflictService());
         var plan = new MoviePlanService(
             new DuplicateService(),
             rename,
@@ -795,7 +946,8 @@ public sealed class IndexModelSafetyTests
                 ["PIM:LibraryGoal"] = workflow.ToString(),
                 ["PIM:MetadataDelayMs"] = "0",
                 ["PIM:RemoveEmptySourceFolders"] = removeEmptySourceFolders.ToString(),
-                ["PIM:WorkflowStateDirectory"] = workspace.StateDirectory
+                ["PIM:WorkflowStateDirectory"] = workspace.StateDirectory,
+                ["PIM:JournalDirectory"] = Path.Combine(workspace.Root, "Journal")
             })
             .Build();
     }
