@@ -48,6 +48,18 @@ namespace PIM.Web.Pages
 
         public List<Movie> Movies { get; set; } = new();
 
+        /// <summary>
+        /// Movie Results rows, things needing the owner first. Display only.
+        /// </summary>
+        public IReadOnlyList<MovieResultRow> ResultRows =>
+            Movies
+                .Select(movie => MovieResultRow.Create(
+                    movie,
+                    ScanPath,
+                    ActiveDestinationProfile.DestinationRoot))
+                .OrderBy(row => row.SortOrder)
+                .ToList();
+
         public FileNode? PreviewTree { get; set; }
 
         public DryRunPreviewResult? DryRunPreview { get; set; }
