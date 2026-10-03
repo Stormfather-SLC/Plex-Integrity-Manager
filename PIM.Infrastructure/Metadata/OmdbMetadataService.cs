@@ -204,6 +204,30 @@ namespace PIM.Infrastructure.Metadata
                     return;
                 }
 
+                // OMDb's title lookup returns its closest title rather than
+                // "not found", so a wrong filename year can produce an unrelated
+                // film (e.g. "Gladiator" + 2001 returned a different 2001 film).
+                // A weak result therefore gets the same bounded recovery as
+                // "not found"; the weak result is kept only if nothing better
+                // turns up. Recovery never auto-accepts a year conflict.
+                if (!hasImdbId &&
+                    !string.IsNullOrWhiteSpace(parsedTitle) &&
+                    CalculateConfidence(
+                        parsedTitle,
+                        parsedYear,
+                        NormalizeMetadataValue(data.Title) ?? string.Empty,
+                        ParseYear(data.Year),
+                        false) < MinimumAutomaticFuzzyConfidence)
+                {
+                    await TryRecoveryFallbackAsync(
+                        movie,
+                        parsedTitle,
+                        parsedYear,
+                        originalNotFoundError: null,
+                        weakExactMatch: data);
+                    return;
+                }
+
                 ApplySuccessfulResponse(
                     movie,
                     data,
@@ -382,19 +406,64 @@ namespace PIM.Infrastructure.Metadata
             return true;
         }
 
+        /// <param name="weakExactMatch">
+        /// A low-scoring result of the exact title/year lookup. When set,
+        /// recovery runs to look for a better candidate; this result remains the
+        /// suggestion if recovery finds nothing that scores higher.
+        /// </param>
         private async Task TryRecoveryFallbackAsync(
             Movie movie,
             string parsedTitle,
             int? parsedYear,
-            string? originalNotFoundError)
+            string? originalNotFoundError,
+            OmdbResponse? weakExactMatch = null)
         {
             _logger.LogInformation(
-                "Exact OMDb title/year lookup returned movie-not-found; starting bounded recovery discovery.");
+                weakExactMatch == null
+                    ? "Exact OMDb title/year lookup returned movie-not-found; starting bounded recovery discovery."
+                    : "Exact OMDb title/year lookup returned only a weak match; starting bounded recovery discovery.");
+
+            var weakConfidence = weakExactMatch == null
+                ? 0
+                : CalculateConfidence(
+                    parsedTitle,
+                    parsedYear,
+                    NormalizeMetadataValue(weakExactMatch.Title) ?? string.Empty,
+                    ParseYear(weakExactMatch.Year),
+                    false);
+
+            void ApplyWeakExactMatch()
+            {
+                ApplySuccessfulResponse(
+                    movie,
+                    weakExactMatch!,
+                    parsedTitle,
+                    parsedYear,
+                    null,
+                    false,
+                    null,
+                    MetadataMatchOrigin.ExactTitleYear,
+                    "Matched by exact OMDb title and year lookup.");
+            }
+
+            // A recovery step finished. Keep its outcome unless it is only a
+            // suggestion that scores below the weak exact result.
+            void KeepBetterSuggestion()
+            {
+                if (weakExactMatch != null &&
+                    movie.HasMetadataReviewReason &&
+                    movie.HasMetadataSuggestion &&
+                    (movie.MatchConfidence ?? 0) < weakConfidence)
+                {
+                    ApplyWeakExactMatch();
+                }
+            }
 
             if (parsedYear.HasValue &&
                 await TryTitleOnlyLookupAsync(movie, parsedTitle, parsedYear) ==
                 FallbackOutcome.Completed)
             {
+                KeepBetterSuggestion();
                 return;
             }
 
@@ -410,6 +479,12 @@ namespace PIM.Infrastructure.Metadata
                 ex is InvalidOperationException ||
                 ex is IOException)
             {
+                if (weakExactMatch != null)
+                {
+                    ApplyWeakExactMatch();
+                    return;
+                }
+
                 MarkLookupFailure(
                     movie,
                     MetadataLookupFailureType.OmdbError,
@@ -425,6 +500,7 @@ namespace PIM.Infrastructure.Metadata
                     spellingCandidates,
                     yearRelaxed: false) == FallbackOutcome.Completed)
             {
+                KeepBetterSuggestion();
                 return;
             }
 
@@ -434,6 +510,7 @@ namespace PIM.Infrastructure.Metadata
                     parsedYear,
                     yearRelaxed: false) == FallbackOutcome.Completed)
             {
+                KeepBetterSuggestion();
                 return;
             }
 
@@ -445,6 +522,7 @@ namespace PIM.Infrastructure.Metadata
                     spellingCandidates,
                     yearRelaxed: true) == FallbackOutcome.Completed)
             {
+                KeepBetterSuggestion();
                 return;
             }
 
@@ -454,10 +532,14 @@ namespace PIM.Infrastructure.Metadata
                     parsedYear,
                     yearRelaxed: true) == FallbackOutcome.Completed)
             {
+                KeepBetterSuggestion();
                 return;
             }
 
-            MarkOmdbFailure(movie, originalNotFoundError);
+            if (weakExactMatch != null)
+                ApplyWeakExactMatch();
+            else
+                MarkOmdbFailure(movie, originalNotFoundError);
         }
 
         private async Task<FallbackOutcome> TryTitleOnlyLookupAsync(
@@ -1115,7 +1197,9 @@ namespace PIM.Infrastructure.Metadata
             var confidence = yearMatches
                 ? Math.Round((titleSimilarity * 80) + 20, 0)
                 : yearConflicts
-                    ? Math.Round(titleSimilarity * 70, 0)
+                    ? IsExactTitleOneYearApart(titleSimilarity, parsedYear, candidateYear)
+                        ? ExactTitleOneYearApartConfidence
+                        : Math.Round(titleSimilarity * 70, 0)
                     : Math.Round(titleSimilarity * 80, 0);
 
             if (spellingEditDistance > 1)
@@ -1305,7 +1389,14 @@ namespace PIM.Infrastructure.Metadata
                 return;
             }
 
-            if (movie.MatchConfidence < 85)
+            // A title result whose year disagrees with the file is never
+            // accepted automatically, whatever its score.
+            var titleResultYearConflicts =
+                parsedYear.HasValue &&
+                metadataYear.HasValue &&
+                parsedYear.Value != metadataYear.Value;
+
+            if (movie.MatchConfidence < 85 || titleResultYearConflicts)
             {
                 // The OMDb result is only a guess. It stays in the Suggested*
                 // fields for the user to accept; the file keeps its own parsed
@@ -1314,8 +1405,9 @@ namespace PIM.Infrastructure.Metadata
                 // against itself, and approve it without any human decision.
                 RestoreParsedIdentity(movie, parsedTitle, parsedYear, originalImdbId);
 
-                var reviewReason =
-                    $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)";
+                var reviewReason = movie.MatchConfidence < 85
+                    ? $"Low confidence metadata match ({movie.MatchConfidence:0}% confidence)"
+                    : $"Low confidence metadata match: OMDb reports {metadataYear} but the file says {parsedYear}";
                 movie.SetMetadataReview(
                     reviewReason,
                     MetadataLookupFailureType.LowConfidence,
@@ -1517,6 +1609,11 @@ namespace PIM.Infrastructure.Metadata
 
             if (matchedByImdbId)
             {
+                // Display score for an IMDb identity that disagrees with the
+                // file's year by one; that conflict always goes to review.
+                if (IsExactTitleOneYearApart(titleSimilarity, parsedYear, metadataYear))
+                    return ExactTitleOneYearApartConfidence;
+
                 if (titleSimilarity >= 0.95 && yearMatches)
                     return 100;
 
@@ -1551,6 +1648,25 @@ namespace PIM.Infrastructure.Metadata
                 return titleSimilarity >= 0.90 ? 78 : 65;
 
             return Math.Round(titleSimilarity * 80, 0);
+        }
+
+        /// <summary>
+        /// Score for a candidate whose title matches exactly but whose year is
+        /// one off (festival vs. release year, or a mislabelled file). High, so
+        /// it ranks first among suggestions, but a year conflict is never
+        /// accepted automatically: it always needs the user's confirmation.
+        /// </summary>
+        private const double ExactTitleOneYearApartConfidence = 90;
+
+        private static bool IsExactTitleOneYearApart(
+            double titleSimilarity,
+            int? parsedYear,
+            int? candidateYear)
+        {
+            return titleSimilarity >= 0.95 &&
+                   parsedYear.HasValue &&
+                   candidateYear.HasValue &&
+                   Math.Abs(parsedYear.Value - candidateYear.Value) == 1;
         }
 
         private static double CalculateTitleSimilarity(string? left, string? right)

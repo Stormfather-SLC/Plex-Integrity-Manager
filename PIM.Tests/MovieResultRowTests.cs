@@ -56,6 +56,31 @@ public sealed class MovieResultRowTests
 
         Assert.True(row.CanAcceptSuggestion);
         Assert.False(row.IsLowConfidenceSuggestion);
+        Assert.Equal("Possible match: Back to the Future (1985), 90% match; file says 1986", row.Summary);
+
+        // Accepting an identity is always confirmed, even at high confidence.
+        Assert.Equal(
+            "Accept \"Back to the Future (1985)\", tt0088763 as the identity of Back to the Future.1986.mkv? The file says 1986.",
+            row.AcceptConfirmation);
+    }
+
+    [Fact]
+    public void LowConfidenceConfirmation_StatesTheScore()
+    {
+        var movie = Unidentified("Gladiator", 2001);
+        movie.SuggestedTitle = "Gladiator Eroticvs: The Lesbian Warriors";
+        movie.SuggestedYear = 2001;
+        movie.SuggestedImdbId = "tt0256056";
+        movie.MatchConfidence = 21;
+        movie.SetMetadataReview("Low confidence metadata match (21% confidence)", MetadataLookupFailureType.LowConfidence);
+
+        Assert.StartsWith("This is only a 21% match.", Row(movie).AcceptConfirmation);
+    }
+
+    [Fact]
+    public void NoSuggestionToAccept_HasNoConfirmation()
+    {
+        Assert.Null(Row(PossiblePlexDuplicate()).AcceptConfirmation);
     }
 
     [Fact]
