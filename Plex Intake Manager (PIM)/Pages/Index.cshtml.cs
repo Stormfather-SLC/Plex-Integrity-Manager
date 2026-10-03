@@ -158,8 +158,23 @@ namespace PIM.Web.Pages
             LoadCachedMovies(showOnlyRecommended);
             LoadCachedDryRunPreview();
 
+            TryGetCachedMovies(out var allMovies);
+            LiveCommit = LiveCommitState.Evaluate(
+                allMovies,
+                _workflowState.GetDryRunApproval(),
+                ActiveDestinationProfile,
+                LibraryGoal,
+                DateTime.UtcNow);
+
             return Task.CompletedTask;
         }
+
+        /// <summary>
+        /// Whether the live-commit button is enabled, with the reason shown
+        /// beneath the buttons.
+        /// </summary>
+        public LiveCommitState LiveCommit { get; private set; } =
+            new(false, "Run a dry run first.", 0, null, null);
 
         public JsonResult OnGetProgress()
         {

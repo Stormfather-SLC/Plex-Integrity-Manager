@@ -7,16 +7,16 @@
     document.addEventListener("DOMContentLoaded", function () {
         initializeSourceCleanupSetting();
 
-        const applyButton = Array.from(
-            document.querySelectorAll('button[type="submit"]'))
-            .find(button => button.textContent.includes("Apply Changes"));
-
-        const commitForm = applyButton?.closest("form");
+        const dryRunButton = document.getElementById("dryRunButton");
+        const liveButton = document.getElementById("liveCommitButton");
+        const commitForm = dryRunButton?.closest("form");
         const workflowStatus = document.getElementById("workflowStatus");
 
-        if (!applyButton || !commitForm || !workflowStatus) {
+        if (!dryRunButton || !liveButton || !commitForm || !workflowStatus) {
             return;
         }
+
+        watchLiveCommitExpiry(liveButton);
 
         commitForm.addEventListener("submit", async function (event) {
             event.preventDefault();
@@ -25,16 +25,29 @@
                 return;
             }
 
-            const dryRunCheckbox = commitForm.querySelector(
-                'input[name="DryRun"][type="checkbox"]');
-            const isDryRun = dryRunCheckbox?.checked !== false;
+            // Only the live button posts DryRun=false; anything else (including
+            // pressing Enter) is a dry run.
+            const submitter = event.submitter ?? dryRunButton;
+            const isDryRun = submitter !== liveButton;
             const cleanupEnabled =
                 document.getElementById("removeEmptySourceFolders")?.checked !== false;
+            const destinationPath =
+                document.querySelector('input[name="OutputPath"]')?.value ?? "";
 
             if (!isDryRun) {
+                if (liveButton.disabled) {
+                    return;
+                }
+
+                const fileCount = Number(liveButton.dataset.filesToMove) || 0;
                 const confirmed = window.confirm(
-                    "Run PIM in live mode? Approved source files may be moved and renamed."
-                );
+                    `Move and rename ${fileCount} file${fileCount === 1 ? "" : "s"} now? ` +
+                    "This is the live commit.\n\n" +
+                    `Destination: ${destinationPath || "(not set)"}\n` +
+                    (cleanupEnabled
+                        ? "Source folders left empty by the moves will be removed."
+                        : "Source folders will be left in place.") +
+                    "\n\nPIM never deletes or overwrites movie files.");
 
                 if (!confirmed) {
                     return;
@@ -42,15 +55,14 @@
             }
 
             commitForm.dataset.pimSubmitting = "true";
-            applyButton.disabled = true;
+            dryRunButton.disabled = true;
+            liveButton.disabled = true;
 
+            const applyButton = submitter;
             const originalButtonText = applyButton.innerHTML;
             applyButton.innerHTML = isDryRun
                 ? "Processing Dry Run..."
                 : "Applying Changes...";
-
-            const destinationPath =
-                document.querySelector('input[name="OutputPath"]')?.value ?? "";
             const startedAt = Date.now();
             let polling = true;
             let latestProgress = {
@@ -160,9 +172,14 @@
             await pollProgress();
 
             try {
+                // FormData does not include the clicked button, so state the
+                // choice explicitly. The server defaults to a dry run.
+                const formData = new FormData(commitForm);
+                formData.set("DryRun", isDryRun ? "true" : "false");
+
                 const response = await fetch(commitForm.action, {
                     method: "POST",
-                    body: new FormData(commitForm),
+                    body: formData,
                     credentials: "same-origin",
                     headers: {
                         "X-Requested-With": "XMLHttpRequest"
@@ -209,8 +226,11 @@
                     escapeHtml(error instanceof Error
                         ? error.message
                         : "An unexpected browser error occurred.");
-                applyButton.disabled = false;
                 applyButton.innerHTML = originalButtonText;
+                dryRunButton.disabled = false;
+                // The live button only returns if the server enabled it.
+                liveButton.disabled = liveButton.dataset.expiresAt === undefined ||
+                    liveButton.dataset.expiresAt === "";
                 commitForm.dataset.pimSubmitting = "false";
 
                 console.error("PIM commit request failed.", error);
@@ -301,6 +321,57 @@
                 checkbox.disabled = false;
             }
         });
+    }
+
+    // Keeps the live-commit button honest while the page stays open: the
+    // "available for N more minutes" text counts down, and the button turns
+    // off when the dry-run approval expires. The server enforces the same rule.
+    function watchLiveCommitExpiry(liveButton) {
+        const expiresAt = Date.parse(liveButton.dataset.expiresAt ?? "");
+        const approvedAt = Date.parse(liveButton.dataset.approvedAt ?? "");
+        const status = document.getElementById("liveCommitStatus");
+        const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+        if (Number.isNaN(expiresAt) || liveButton.disabled) {
+            return;
+        }
+
+        const update = () => {
+            const remainingMs = expiresAt - Date.now();
+
+            if (remainingMs <= 0) {
+                liveButton.disabled = true;
+                liveButton.dataset.expiresAt = "";
+
+                if (status) {
+                    status.className = "small mt-2 text-muted";
+                    status.textContent =
+                        "⛔ The last dry run is over 30 minutes old. Run the dry run again.";
+                }
+
+                window.clearInterval(timer);
+                return;
+            }
+
+            if (status) {
+                const minutesLeft = Math.max(1, Math.ceil(remainingMs / 60000));
+                let text = status.textContent.replace(
+                    /available for \d+ more minutes?/,
+                    `available for ${plural(minutesLeft, "more minute")}`);
+
+                if (!Number.isNaN(approvedAt)) {
+                    const minutesAgo = Math.max(0, Math.floor((Date.now() - approvedAt) / 60000));
+                    text = text.replace(
+                        /approved (just now|\d+ minutes? ago)/,
+                        `approved ${minutesAgo === 0 ? "just now" : plural(minutesAgo, "minute") + " ago"}`);
+                }
+
+                status.textContent = text;
+            }
+        };
+
+        const timer = window.setInterval(update, 15000);
+        update();
     }
 
     async function fetchSourceCleanupStatus() {

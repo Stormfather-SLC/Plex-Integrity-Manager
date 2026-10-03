@@ -422,6 +422,154 @@ public sealed class IndexModelSafetyTests
     }
 
     [Fact]
+    public async Task RealFiles_LiveButton_TurnsOnOnlyAfterADryRun_AndOffAgainAfterTheLiveCommit()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-LiveButton-Files");
+        var sourceFile = Path.Combine(
+            workspace.SourceRoot,
+            "Button Movie (2024)",
+            "Button.Movie.2024.mkv");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceFile)!);
+        Directory.CreateDirectory(workspace.DestinationRoot);
+        File.WriteAllText(sourceFile, "movie");
+
+        var configuration = CreateConfiguration(
+            workspace,
+            LibraryGoal.OrganizeNewMovies,
+            removeEmptySourceFolders: false);
+        var profile = new DestinationProfile
+        {
+            Name = "Button Profile",
+            DestinationRoot = workspace.DestinationRoot
+        };
+        var store = CreateStore(configuration);
+        store.SaveMovies(
+            new List<Movie>
+            {
+                new()
+                {
+                    Title = "Button Movie",
+                    Year = 2024,
+                    ImdbId = "tt7654322",
+                    OriginalFilePath = sourceFile,
+                    FileName = Path.GetFileName(sourceFile),
+                    DirectoryPath = Path.GetDirectoryName(sourceFile),
+                    FileSizeBytes = new FileInfo(sourceFile).Length,
+                    MetadataFetched = true,
+                    MatchConfidence = 100,
+                    Status = "IMDb ID Match"
+                }
+            },
+            workspace.SourceRoot);
+        IndexModel Page()
+        {
+            var (rename, plan) = CreateRealServices(configuration);
+            return CreateModel(store, configuration, profile, rename: rename, plan: plan);
+        }
+
+        var beforeDryRun = Page();
+        await beforeDryRun.OnGetAsync();
+        Assert.False(beforeDryRun.LiveCommit.Enabled);
+        Assert.Contains("Run a dry run first", beforeDryRun.LiveCommit.Message);
+
+        var dryRun = Page();
+        dryRun.DryRun = true;
+        await dryRun.OnPostCommitAsync();
+        Assert.True(File.Exists(sourceFile));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.DestinationRoot));
+
+        // Showing the page after the dry run enables the live button and still
+        // moves nothing.
+        var afterDryRun = Page();
+        await afterDryRun.OnGetAsync();
+        Assert.True(afterDryRun.LiveCommit.Enabled, afterDryRun.LiveCommit.Message);
+        Assert.Equal(1, afterDryRun.LiveCommit.FilesToMove);
+        Assert.NotNull(afterDryRun.LiveCommit.ExpiresUtc);
+        Assert.True(File.Exists(sourceFile));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.DestinationRoot));
+
+        // The live commit that button posts is accepted by the server re-check.
+        var live = Page();
+        live.DryRun = false;
+        await live.OnPostCommitAsync();
+        Assert.StartsWith("Changes Applied", live.TempData["Message"]?.ToString());
+        Assert.False(File.Exists(sourceFile));
+
+        // The approval is used up, so the button is off until the next dry run.
+        var afterLive = Page();
+        await afterLive.OnGetAsync();
+        Assert.False(afterLive.LiveCommit.Enabled);
+    }
+
+    [Fact]
+    public async Task LiveButton_TurnsOffWhenTheDryRunExpires()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        // The dry run stamps its approval with the real clock; start the store's
+        // clock just after it, or the store rejects the approval as future-dated.
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow.AddSeconds(5));
+        var profile = CreateProfile(workspace);
+        var store = CreateStore(configuration, clock);
+        store.SaveMovies(
+            new List<Movie>
+            {
+                CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies)
+            },
+            workspace.SourceRoot);
+        var dryRun = CreateModel(store, configuration, profile);
+        dryRun.DryRun = true;
+        await dryRun.OnPostCommitAsync();
+
+        var fresh = CreateModel(store, configuration, profile);
+        await fresh.OnGetAsync();
+        Assert.True(fresh.LiveCommit.Enabled, fresh.LiveCommit.Message);
+
+        clock.Advance(DryRunApproval.MaxAge + TimeSpan.FromMinutes(1));
+        var expired = CreateModel(CreateStore(configuration, clock), configuration, profile);
+        await expired.OnGetAsync();
+
+        Assert.False(expired.LiveCommit.Enabled);
+        Assert.Contains("Run a dry run first", expired.LiveCommit.Message);
+    }
+
+    [Fact]
+    public async Task LiveButton_TurnsOffAfterADecisionChangesThePlan()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var first = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        var second = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        second.FileName = "Handler.Movie.2024.Copy.mkv";
+        foreach (var movie in new[] { first, second })
+        {
+            movie.ApprovedForCommit = false;
+            movie.RequireReview("No clear best file for Standard Version");
+        }
+        var third = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        third.Title = "Another Movie";
+        third.ImdbId = "tt7777777";
+        third.FileName = "Another.Movie.2024.mkv";
+        third.OriginalFilePath = Path.Combine(workspace.SourceRoot, third.FileName);
+        store.SaveMovies(new List<Movie> { first, second, third }, workspace.SourceRoot);
+        var dryRun = CreateModel(store, configuration, profile);
+        dryRun.DryRun = true;
+        await dryRun.OnPostCommitAsync();
+
+        var beforeDecision = CreateModel(store, configuration, profile);
+        await beforeDecision.OnGetAsync();
+        Assert.True(beforeDecision.LiveCommit.Enabled, beforeDecision.LiveCommit.Message);
+
+        CreateModel(store, configuration, profile).OnPostKeepDuplicateCopy(first.Id);
+
+        var afterDecision = CreateModel(store, configuration, profile);
+        await afterDecision.OnGetAsync();
+        Assert.False(afterDecision.LiveCommit.Enabled);
+    }
+
+    [Fact]
     public async Task KeepDuplicateCopy_InvalidatesAnEarlierDryRunApproval()
     {
         using var workspace = new TempWorkspace("PIM-Index-Tests");
