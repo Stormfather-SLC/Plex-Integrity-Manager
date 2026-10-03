@@ -62,15 +62,32 @@ public sealed class MovieResultRow
         _ => "Skipped"
     };
 
+    /// <summary>
+    /// Badge colours. PIM ships Bootstrap 5.1, so these use bg-* plus an
+    /// explicit text colour (the text-bg-* helpers need 5.2 or later).
+    /// </summary>
     public string BadgeClass => State switch
     {
-        MovieResultState.Decide => "text-bg-primary",
-        MovieResultState.Blocked => "text-bg-warning",
-        MovieResultState.Error => "text-bg-danger",
-        MovieResultState.Pending => "text-bg-light border",
-        MovieResultState.Ready => "text-bg-success",
-        _ => "text-bg-secondary"
+        MovieResultState.Decide => "bg-primary text-white",
+        MovieResultState.Blocked => "bg-warning text-dark",
+        MovieResultState.Error => "bg-danger text-white",
+        MovieResultState.Pending => "bg-light text-dark border",
+        MovieResultState.Ready => "bg-success text-white",
+        _ => "bg-secondary text-white"
     };
+
+    /// <summary>
+    /// The movie's identity is still in question. Identity comes first: until
+    /// it is confirmed, duplicate decisions are not offered.
+    /// </summary>
+    public bool IsIdentityUnconfirmed => Movie.HasMetadataReviewReason;
+
+    /// <summary>
+    /// The suggested match scored below the automatic threshold, so accepting
+    /// it asks for confirmation.
+    /// </summary>
+    public bool IsLowConfidenceSuggestion =>
+        CanAcceptSuggestion && Movie.MatchConfidence is < 85;
 
     /// <summary>Review reasons beyond the one the summary describes.</summary>
     public int AdditionalReasonCount =>
@@ -78,13 +95,22 @@ public sealed class MovieResultRow
             ? Math.Max(0, Reasons.Count - 1)
             : 0;
 
-    public bool CanAcceptSuggestion => Movie.NeedsReview && Movie.CanAcceptMetadataSuggestion;
+    /// <summary>
+    /// Only offered while the identity is in question. A movie identified by
+    /// its IMDb ID also keeps that identity in the suggestion fields, which
+    /// must not turn into an "Accept match" button.
+    /// </summary>
+    public bool CanAcceptSuggestion =>
+        Movie.NeedsReview &&
+        Movie.HasMetadataReviewReason &&
+        Movie.CanAcceptMetadataSuggestion;
 
     public bool CanKeepThisCopy => Movie.HasDuplicateTieReview;
 
     public bool CanConfirmFileName => Movie.HasSuspiciousFileNameReview;
 
-    public bool CanAddPlexDuplicate => Movie.NeedsPlexDuplicateDecision;
+    public bool CanAddPlexDuplicate =>
+        Movie.NeedsPlexDuplicateDecision && !Movie.HasMetadataReviewReason;
 
     public bool CanUndoPlexDuplicate => Movie.IsPlexDuplicateAccepted;
 
@@ -164,20 +190,33 @@ public sealed class MovieResultRow
 
             case MovieResultState.Decide:
             case MovieResultState.Blocked:
-                if (movie.NeedsPlexDuplicateDecision)
+                // Identity first: a duplicate decision means nothing until PIM
+                // knows which movie this is.
+                if (movie.HasMetadataReviewReason)
                 {
-                    return "Possible duplicate: Plex already has this movie " +
-                           $"({movie.ExistingPlexResolution ?? "resolution unknown"}, " +
-                           $"{VideoResolution.FormatSize(movie.ExistingPlexSizeBytes)})";
+                    if (movie.CanAcceptMetadataSuggestion)
+                    {
+                        var confidence = movie.MatchConfidence.HasValue
+                            ? $", {movie.MatchConfidence.Value:0}% match"
+                            : string.Empty;
+
+                        return $"Possible match: {movie.SuggestedTitle} " +
+                               $"({movie.SuggestedYear?.ToString() ?? "year unknown"}){confidence}";
+                    }
+
+                    return movie.MetadataReviewReason ??
+                           reasons.FirstOrDefault() ??
+                           "Identity needs review";
                 }
 
                 if (movie.HasDuplicateTieReview)
                     return "Tied with another copy of this movie; choose which one to keep";
 
-                if (movie.CanAcceptMetadataSuggestion && movie.HasMetadataReviewReason)
+                if (movie.NeedsPlexDuplicateDecision)
                 {
-                    return $"Possible match: {movie.SuggestedTitle} " +
-                           $"({movie.SuggestedYear?.ToString() ?? "year unknown"})";
+                    return "Possible duplicate: Plex already has this movie " +
+                           $"({movie.ExistingPlexResolution ?? "resolution unknown"}, " +
+                           $"{VideoResolution.FormatSize(movie.ExistingPlexSizeBytes)})";
                 }
 
                 if (movie.HasSuspiciousFileNameReview && reasons.Count == 1)
