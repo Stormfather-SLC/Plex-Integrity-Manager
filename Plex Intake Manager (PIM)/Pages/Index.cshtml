@@ -324,9 +324,11 @@
             </button>
         </form>
 
-        <!-- Cancel (reserved for future use) -->
+        <!-- Cancel: stops Identify Movies or a dry run's lookups after the
+             current movie; enabled by identify-workflow.js while they run. -->
         <button type="button"
                 id="cancelBtn"
+                title="Stop looking up movies after the current one. Finished lookups are kept."
                 disabled>
             ⛔ Cancel
         </button>

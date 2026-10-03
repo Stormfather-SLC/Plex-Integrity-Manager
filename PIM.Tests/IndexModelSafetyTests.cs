@@ -880,6 +880,123 @@ public sealed class IndexModelSafetyTests
                     line.Contains("alongside the existing Plex copy"));
     }
 
+    [Fact]
+    public async Task Identify_StoppedPartWay_KeepsFinishedLookupsAndSavesThePlan()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var first = NotLookedUp(workspace, "First.Movie.2020.mkv");
+        var second = NotLookedUp(workspace, "Second.Movie.2021.mkv");
+        var third = NotLookedUp(workspace, "Third.Movie.2022.mkv");
+        store.SaveMovies(new List<Movie> { first, second, third }, workspace.SourceRoot);
+        var progress = new ScanProgress();
+        var metadata = new CancelAfterFirstLookup(progress);
+        var plan = new RecordingPlanService();
+        var model = CreateModel(store, configuration, profile, metadata: metadata, plan: plan, progress: progress);
+
+        await model.OnPostEnrichAsync();
+
+        Assert.Equal(1, metadata.CallCount);
+        Assert.True(first.MetadataFetched);
+        Assert.False(second.MetadataFetched);
+        Assert.False(third.MetadataFetched);
+        Assert.True(MovieResultRow.IsNotLookedUp(second));
+        Assert.Equal(1, plan.CallCount);
+        Assert.Contains("stopped after 1 of 3", model.TempData["Message"]?.ToString());
+        Assert.False(progress.CanCancel);
+        Assert.False(progress.IsRunning);
+
+        // The finished lookup was saved and survives a restart.
+        Assert.True(CreateStore(configuration).TryGetMovies(out var saved));
+        Assert.True(saved.Single(movie => movie.Id == first.Id).MetadataFetched);
+    }
+
+    [Fact]
+    public async Task DryRun_StoppedDuringLookups_CreatesNoApprovalAndMovesNothing()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var store = CreateStore(configuration);
+        var profile = CreateProfile(workspace);
+        var approved = CreateMovie(workspace, profile, LibraryGoal.OrganizeNewMovies);
+        var first = NotLookedUp(workspace, "First.Movie.2020.mkv");
+        var second = NotLookedUp(workspace, "Second.Movie.2021.mkv");
+        store.SaveMovies(new List<Movie> { approved, first, second }, workspace.SourceRoot);
+        var progress = new ScanProgress();
+        var rename = new RecordingRenameService();
+        var model = CreateModel(
+            store,
+            configuration,
+            profile,
+            metadata: new CancelAfterFirstLookup(progress),
+            rename: rename,
+            progress: progress);
+        model.DryRun = true;
+
+        await model.OnPostCommitAsync();
+
+        Assert.Equal(0, rename.ExecuteCount);
+        Assert.Null(store.GetDryRunApproval());
+        Assert.Null(store.GetDryRunPreview());
+        Assert.Contains("no dry-run approval was created", model.TempData["Message"]?.ToString());
+        Assert.True(first.MetadataFetched);
+        Assert.False(second.MetadataFetched);
+        Assert.False(progress.CanCancel);
+    }
+
+    [Fact]
+    public void Cancel_WhenNothingIsRunning_ReportsNothingToStop()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var model = CreateModel(CreateStore(configuration), configuration, CreateProfile(workspace));
+
+        var result = model.OnPostCancel();
+
+        Assert.Contains("requested = False", result.Value?.ToString());
+    }
+
+    private static Movie NotLookedUp(TempWorkspace workspace, string fileName)
+    {
+        return new Movie
+        {
+            FileName = fileName,
+            OriginalFilePath = Path.Combine(workspace.SourceRoot, fileName),
+            Title = Path.GetFileNameWithoutExtension(fileName).Replace('.', ' '),
+            Status = "Discovered"
+        };
+    }
+
+    /// <summary>
+    /// Fake OMDb that completes one lookup, then behaves as if the user
+    /// clicked Cancel while it was running.
+    /// </summary>
+    private sealed class CancelAfterFirstLookup : IMetadataService
+    {
+        private readonly ScanProgress _progress;
+
+        public CancelAfterFirstLookup(ScanProgress progress)
+        {
+            _progress = progress;
+        }
+
+        public int CallCount { get; private set; }
+
+        public Task EnrichAsync(Movie movie)
+        {
+            CallCount++;
+            Assert.True(_progress.CanCancel);
+            movie.MetadataFetched = true;
+            movie.MetadataMatchOrigin = MetadataMatchOrigin.ExactTitleYear;
+            movie.ImdbId = "tt" + CallCount.ToString("0000000");
+            movie.Year ??= 2020;
+            Assert.True(_progress.RequestCancel());
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class FixedPlexConflictService : IPlexLibraryConflictService
     {
         private readonly PlexLibraryConflictResult _result;
@@ -966,10 +1083,11 @@ public sealed class IndexModelSafetyTests
         IWorkflowStateStore store,
         IConfiguration configuration,
         DestinationProfile profile,
-        CountingMetadataService? metadata = null,
+        IMetadataService? metadata = null,
         IRenameService? rename = null,
         IMoviePlanService? plan = null,
-        IMetadataSuggestionService? suggestion = null)
+        IMetadataSuggestionService? suggestion = null,
+        ScanProgress? progress = null)
     {
         metadata ??= new CountingMetadataService();
         rename ??= new RecordingRenameService();
@@ -981,7 +1099,7 @@ public sealed class IndexModelSafetyTests
             rename,
             configuration,
             store,
-            new ScanProgress(),
+            progress ?? new ScanProgress(),
             new PreviewTreeService(),
             new DryRunPreviewService(),
             new FixedProfileStore(profile),
