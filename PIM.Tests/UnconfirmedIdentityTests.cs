@@ -117,6 +117,80 @@ public sealed class UnconfirmedIdentityTests
         Assert.Null(movie.ImdbId);
     }
 
+    [Fact]
+    public async Task WrongFilenameYear_SuggestsTheExactTitleOneYearOffAt90Percent()
+    {
+        // Real OMDb behaviour for "Gladiator (2001).mkv": the title+year lookup
+        // returns an unrelated 2001 film; the same title without a year
+        // returns Gladiator (2000).
+        var handler = new RoutingHandler(query =>
+            query.Contains("i=tt0172495") ? RealGladiator
+            : query.Contains("t=Gladiator&y=2001") ? WrongMovie
+            : query.Contains("t=Gladiator&type=") ? RealGladiator
+            : NotFound);
+        var service = CreateService(handler);
+        var movie = CreateGladiator();
+        var movies = new List<Movie> { movie };
+
+        await service.EnrichAsync(movie);
+        CreatePlanner().Rebuild(movies, CreateProfile(), string.Empty, LibraryGoal.OrganizeNewMovies);
+
+        Assert.Equal("Gladiator", movie.SuggestedTitle);
+        Assert.Equal(2000, movie.SuggestedYear);
+        Assert.Equal("tt0172495", movie.SuggestedImdbId);
+        Assert.Equal(90, movie.MatchConfidence);
+        Assert.True(movie.CanAcceptMetadataSuggestion);
+
+        // Still only a suggestion: the year conflict needs a human decision.
+        Assert.True(movie.NeedsReview);
+        Assert.False(movie.ApprovedForCommit);
+        Assert.Equal(2001, movie.Year);
+        Assert.Null(movie.ImdbId);
+        Assert.Equal(MetadataLookupFailureType.FuzzyCandidateYearConflict, movie.MetadataLookupFailureType);
+
+        Assert.True(await new MetadataSuggestionService(service, CreatePlanner()).AcceptAsync(
+            movie,
+            movies,
+            CreateProfile(),
+            string.Empty,
+            LibraryGoal.OrganizeNewMovies));
+
+        Assert.Equal("tt0172495", movie.ImdbId);
+        Assert.Equal(2000, movie.Year);
+        Assert.False(movie.HasMetadataReviewReason);
+    }
+
+    [Fact]
+    public async Task ExactTitleTwoYearsOff_IsNotRaisedTo90Percent()
+    {
+        var handler = new RoutingHandler(query =>
+            query.Contains("t=Gladiator&y=2002") ? WrongMovie.Replace("2001", "2002")
+            : query.Contains("t=Gladiator&type=") ? RealGladiator
+            : NotFound);
+        var movie = CreateGladiator();
+        movie.Year = 2002;
+
+        await CreateService(handler).EnrichAsync(movie);
+
+        Assert.Equal("tt0172495", movie.SuggestedImdbId);
+        Assert.Equal(70, movie.MatchConfidence);
+        Assert.True(movie.NeedsReview);
+    }
+
+    [Fact]
+    public async Task WeakTitleMatch_IsKeptWhenRecoveryFindsNothingBetter()
+    {
+        var handler = new RoutingHandler();
+        var movie = CreateGladiator();
+
+        await CreateService(handler).EnrichAsync(movie);
+
+        Assert.Contains(handler.RequestUris, uri => uri.Query.Contains("t=Gladiator&type="));
+        Assert.Equal("tt0256056", movie.SuggestedImdbId);
+        Assert.Equal(21, movie.MatchConfidence);
+        Assert.StartsWith("Low confidence metadata match", movie.ReviewReason);
+    }
+
     private static Movie CreateGladiator()
     {
         return new Movie
@@ -163,13 +237,39 @@ public sealed class UnconfirmedIdentityTests
         DestinationRoot = Path.Combine(Path.GetTempPath(), "PIM-Unconfirmed-Identity-Destination")
     };
 
+    private const string NotFound = """{ "Response": "False", "Error": "Movie not found!" }""";
+
+    private const string RealGladiator = """
+        {
+          "Title": "Gladiator",
+          "Year": "2000",
+          "Rated": "R",
+          "Genre": "Action, Adventure, Drama",
+          "imdbID": "tt0172495",
+          "Response": "True"
+        }
+        """;
+
+    /// <summary>
+    /// Fake OMDb. By default only the title+year lookup (and an IMDb lookup of
+    /// the wrong film) return the unrelated 2001 film, as with the real Case_06
+    /// data; every other request is "not found", so recovery finds nothing.
+    /// </summary>
     private sealed class RoutingHandler : HttpMessageHandler
     {
-        private readonly string _response;
+        private readonly Func<string, string> _respond;
 
-        public RoutingHandler(string response = WrongMovie)
+        public RoutingHandler(string yearLookupResponse = WrongMovie)
+            : this(query =>
+                query.Contains("t=Gladiator&y=2001") || query.Contains("i=tt0256056")
+                    ? yearLookupResponse
+                    : NotFound)
         {
-            _response = response;
+        }
+
+        public RoutingHandler(Func<string, string> respond)
+        {
+            _respond = respond;
         }
 
         public List<Uri> RequestUris { get; } = new();
@@ -180,11 +280,9 @@ public sealed class UnconfirmedIdentityTests
         {
             RequestUris.Add(request.RequestUri!);
 
-            // OMDb's title lookup and its IMDb lookup both return the same
-            // unrelated movie here, as happened with the real Case_06 data.
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(_response)
+                Content = new StringContent(_respond(Uri.UnescapeDataString(request.RequestUri!.Query)))
             });
         }
     }

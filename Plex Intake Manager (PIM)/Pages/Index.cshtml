@@ -835,9 +835,7 @@
                                             <form method="post"
                                                   asp-page-handler="AcceptSuggestedMatch"
                                                   class="d-inline"
-                                                  data-confirm="@(row.IsLowConfidenceSuggestion
-                                                      ? $"This is only a {movie.MatchConfidence:0}% match. Accept \"{movie.SuggestedTitle} ({movie.SuggestedYear})\", {movie.SuggestedImdbId}, as the identity of {movie.FileName}?"
-                                                      : null)">
+                                                  data-confirm="@row.AcceptConfirmation">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="movieId" value="@movie.Id" />
                                                 <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />

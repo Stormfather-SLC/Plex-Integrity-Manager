@@ -89,6 +89,35 @@ public sealed class MovieResultRow
     public bool IsLowConfidenceSuggestion =>
         CanAcceptSuggestion && Movie.MatchConfidence is < 85;
 
+    /// <summary>
+    /// Accepting a suggestion sets the movie's identity (and so its name and
+    /// destination), so it is always confirmed explicitly.
+    /// </summary>
+    public string? AcceptConfirmation
+    {
+        get
+        {
+            if (!CanAcceptSuggestion)
+                return null;
+
+            var suggestion =
+                $"\"{Movie.SuggestedTitle} ({Movie.SuggestedYear})\", {Movie.SuggestedImdbId}";
+            var file = Movie.FileName ?? Path.GetFileName(Movie.OriginalFilePath);
+            var yearNote = SuggestedYearDiffers
+                ? $" The file says {Movie.Year}."
+                : string.Empty;
+
+            return IsLowConfidenceSuggestion
+                ? $"This is only a {Movie.MatchConfidence:0}% match.{yearNote} Accept {suggestion} as the identity of {file}?"
+                : $"Accept {suggestion} as the identity of {file}?{yearNote}";
+        }
+    }
+
+    private bool SuggestedYearDiffers =>
+        Movie.Year.HasValue &&
+        Movie.SuggestedYear.HasValue &&
+        Movie.Year.Value != Movie.SuggestedYear.Value;
+
     /// <summary>Review reasons beyond the one the summary describes.</summary>
     public int AdditionalReasonCount =>
         State is MovieResultState.Decide or MovieResultState.Blocked
@@ -199,9 +228,14 @@ public sealed class MovieResultRow
                         var confidence = movie.MatchConfidence.HasValue
                             ? $", {movie.MatchConfidence.Value:0}% match"
                             : string.Empty;
+                        var yearNote = movie.Year.HasValue &&
+                                       movie.SuggestedYear.HasValue &&
+                                       movie.Year.Value != movie.SuggestedYear.Value
+                            ? $"; file says {movie.Year}"
+                            : string.Empty;
 
                         return $"Possible match: {movie.SuggestedTitle} " +
-                               $"({movie.SuggestedYear?.ToString() ?? "year unknown"}){confidence}";
+                               $"({movie.SuggestedYear?.ToString() ?? "year unknown"}){confidence}{yearNote}";
                     }
 
                     return movie.MetadataReviewReason ??
