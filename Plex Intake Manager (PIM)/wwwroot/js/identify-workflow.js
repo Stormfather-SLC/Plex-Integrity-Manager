@@ -70,10 +70,9 @@
         const commitForm = document.querySelector('form[action*="handler=Commit"]');
 
         if (commitForm && cancelButton) {
-            commitForm.addEventListener("submit", function () {
-                const dryRunBox = commitForm.querySelector('input[name="DryRun"][type="checkbox"]');
-
-                if (dryRunBox && !dryRunBox.checked) {
+            commitForm.addEventListener("submit", function (event) {
+                // Only a dry run looks movies up; a live commit is not cancellable.
+                if (event.submitter?.id === "liveCommitButton") {
                     return;
                 }
 

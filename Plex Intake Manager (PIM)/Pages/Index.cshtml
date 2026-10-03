@@ -297,30 +297,30 @@
               style="display:inline-flex; align-items:center; gap:10px; margin:0;">
             @Html.AntiForgeryToken()
 
-            <!-- Dry Run -->
-            <label style="display:flex; align-items:center; gap:6px; margin:0;">
-                <input asp-for="DryRun" />
-                <span>Dry Run</span>
-            </label>
-
-            @if (Model.DryRun)
-            {
-                <span class="text-success" style="font-size:0.85em;">
-                    <!--Dry Run enabled — no files will be moved or renamed.-->
-                </span>
-            }
-            else
-            {
-                <span class="text-danger" style="font-size:0.85em;">
-                    Live mode — approved files may be moved and renamed.
-                </span>
-            }
-
-            <!-- Apply Changes -->
+            <!-- Dry run: shows exactly what a live commit would do; changes nothing.
+                 Both buttons post to the same Commit handler; a post without a
+                 DryRun value is treated as a dry run. -->
             <button type="submit"
-                    class="btn btn-success"
-                    disabled="@(!Model.Movies.Any(m => m.ApprovedForCommit))">
-                🚀 Apply Changes
+                    name="DryRun"
+                    value="true"
+                    id="dryRunButton"
+                    class="btn btn-primary"
+                    disabled="@(!Model.Movies.Any())">
+                🧪 Run Dry Run
+            </button>
+
+            <!-- Live commit: only available while the last dry run still covers
+                 exactly the current plan. The server re-checks on submit. -->
+            <button type="submit"
+                    name="DryRun"
+                    value="false"
+                    id="liveCommitButton"
+                    class="btn btn-danger"
+                    data-files-to-move="@Model.LiveCommit.FilesToMove"
+                    data-approved-at="@(Model.LiveCommit.ApprovedUtc?.ToString("o"))"
+                    data-expires-at="@(Model.LiveCommit.ExpiresUtc?.ToString("o"))"
+                    disabled="@(!Model.LiveCommit.Enabled)">
+                🚀 Apply Changes (Live)
             </button>
         </form>
 
@@ -333,6 +333,11 @@
             ⛔ Cancel
         </button>
 
+    </div>
+
+    <div id="liveCommitStatus"
+         class="small mt-2 @(Model.LiveCommit.Enabled ? "text-success" : "text-muted")">
+        @(Model.LiveCommit.Enabled ? "✅" : "⛔") @Model.LiveCommit.Message
     </div>
 
     <!-- Real-time status text -->
