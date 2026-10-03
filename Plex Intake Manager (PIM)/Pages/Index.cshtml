@@ -230,8 +230,20 @@
     }
 
     .movie-results .summary-line,
-    .movie-results .path-line {
+    .movie-results .path-line,
+    .dry-run-preview .summary-line,
+    .dry-run-preview .path-line {
         max-width: 80ch;
+    }
+
+    .dry-run-filter-card {
+        min-width: 9rem;
+    }
+
+    /* Long previews scroll within the card; rows never scroll sideways. */
+    .dry-run-list {
+        max-height: 60vh;
+        overflow-y: auto;
     }
 
     .movie-results .movie-details-row > td {
@@ -344,290 +356,116 @@
 ========================================================= -->
 @if (Model.DryRunPreview != null)
 {
+    var preview = Model.DryRunPreview;
+    var previewRows = Model.PreviewRows;
+    var previewCards = new[]
+    {
+        (Key: "move", Label: "Move / Rename", Count: preview.ReadyToMoveCount, Css: "text-success"),
+        (Key: "review", Label: "Needs review", Count: preview.NeedsReviewCount, Css: "text-primary"),
+        (Key: "error", Label: "Errors", Count: preview.ErrorCount, Css: "text-danger"),
+        (Key: "duplicate", Label: "Duplicates left in place", Count: preview.DuplicateSkipCount, Css: "text-secondary")
+    };
+
     <div id="dryRunPreviewSection" class="card mb-4 border-primary shadow-sm">
 
-        <div class="card-header bg-primary text-white">
+        <div class="card-header bg-primary text-white d-flex flex-wrap justify-content-between gap-2">
             <strong>🧪 Dry Run Preview</strong>
+            <span class="small">
+                Workflow: @PIM.Core.Models.LibraryGoalSettings.GetDisplayName(preview.LibraryGoal)
+            </span>
         </div>
 
         <div class="card-body">
 
-            <p class="text-muted mb-4">
-                No files have been changed yet. This preview shows what PIM would do
-                if you run the commit live.
-                <br />
-                <strong>Total Previewed Files:</strong> @Model.DryRunPreview.TotalFiles
-                <br />
-                <strong>Workflow:</strong>
-                @PIM.Core.Models.LibraryGoalSettings.GetDisplayName(Model.DryRunPreview.LibraryGoal)
+            <p class="mb-3">
+                No files have been changed. A live commit would
+                <strong>move @preview.ReadyToMoveCount @(preview.ReadyToMoveCount == 1 ? "file" : "files")</strong>.
+                @if (preview.NeedsReviewCount + preview.ErrorCount > 0)
+                {
+                    <span>
+                        @(preview.NeedsReviewCount + preview.ErrorCount) of @preview.TotalFiles
+                        would be left where they are until resolved in Movie Results.
+                    </span>
+                }
             </p>
 
-            <!-- Summary Filter Cards -->
-            <div class="row mb-4" id="dryRunFilterCards">
-
-                <div class="col-md-3 mb-3">
+            <div class="d-flex flex-wrap gap-2 mb-2"
+                 id="dryRunFilterCards"
+                 data-default-filter="@(preview.ReadyToMoveCount > 0 ? "move" : "all")">
+                @foreach (var card in previewCards)
+                {
                     <button type="button"
-                            class="card h-100 text-center w-100 dry-run-filter-card"
-                            data-preview-filter="move"
-                            style="cursor:pointer;">
-                        <div class="card-body">
-                            <h5 class="card-title">Move / Rename</h5>
-                            <div class="display-6">
-                                @Model.DryRunPreview.ReadyToMoveCount
-                            </div>
-                        </div>
+                            class="card dry-run-filter-card flex-row align-items-baseline gap-2 px-3 py-2"
+                            data-preview-filter="@card.Key"
+                            aria-pressed="false">
+                        <span class="fs-5 fw-bold @card.Css">@card.Count</span>
+                        <span>@card.Label</span>
                     </button>
-                </div>
-
-                <div class="col-md-3 mb-3">
-                    <button type="button"
-                            class="card h-100 text-center w-100 dry-run-filter-card"
-                            data-preview-filter="duplicate"
-                            style="cursor:pointer;">
-                        <div class="card-body">
-                            <h5 class="card-title">Duplicates to Skip</h5>
-                            <div class="display-6">
-                                @Model.DryRunPreview.DuplicateSkipCount
-                            </div>
-                        </div>
-                    </button>
-                </div>
-
-                <div class="col-md-3 mb-3">
-                    <button type="button"
-                            class="card h-100 text-center w-100 dry-run-filter-card"
-                            data-preview-filter="review"
-                            style="cursor:pointer;">
-                        <div class="card-body">
-                            <h5 class="card-title">Needs Review</h5>
-                            <div class="display-6">
-                                @Model.DryRunPreview.NeedsReviewCount
-                            </div>
-                        </div>
-                    </button>
-                </div>
-
-                <div class="col-md-3 mb-3">
-                    <button type="button"
-                            class="card h-100 text-center w-100 dry-run-filter-card"
-                            data-preview-filter="error"
-                            style="cursor:pointer;">
-                        <div class="card-body">
-                            <h5 class="card-title">Errors</h5>
-                            <div class="display-6">
-                                @Model.DryRunPreview.ErrorCount
-                            </div>
-                        </div>
-                    </button>
-                </div>
-
+                }
+                <button type="button"
+                        class="btn btn-link btn-sm align-self-center"
+                        id="dryRunFilterShowAll">
+                    Show all @preview.TotalFiles
+                </button>
             </div>
 
-            <div class="mb-3">
-                <small id="dryRunFilterStatus" class="text-muted">
-                    Showing all dry run preview items.
-                </small>
-            </div>
-            <!-- Detailed Preview Table -->
-            <div style="max-height:500px; overflow:auto;">
+            <p id="dryRunFilterStatus" class="text-muted small mb-2"></p>
 
-                <table class="table table-sm table-striped table-bordered align-middle">
-
+            <div class="dry-run-list">
+                <table class="table table-sm table-hover align-middle mb-0 dry-run-preview">
                     <thead class="table-light">
                         <tr>
-                            <th style="width:150px;">Action</th>
-                            <th>Original File</th>
-                            <th>Target Path</th>
-                            <th style="width:300px;">Status</th>
+                            <th style="width:6rem;">Action</th>
+                            <th>Movie</th>
+                            <th>Result</th>
+                            <th class="text-end" style="width:1%;"></th>
                         </tr>
                     </thead>
-
                     <tbody>
-                        @foreach (var item in Model.DryRunPreview.Items)
+                        @foreach (var row in previewRows)
                         {
-                            var previewCategory =
-                            item.Action.Contains("Move", StringComparison.OrdinalIgnoreCase) ||
-                            item.Action.Contains("Rename", StringComparison.OrdinalIgnoreCase)
-                            ? "move"
-                            : item.Action.Contains("Duplicate", StringComparison.OrdinalIgnoreCase) ||
-                            item.Action.Contains("Skip", StringComparison.OrdinalIgnoreCase)
-                            ? "duplicate"
-                            : item.Action.Contains("Review", StringComparison.OrdinalIgnoreCase)
-                            ? "review"
-                            : item.Action.Contains("Error", StringComparison.OrdinalIgnoreCase)
-                            ? "error"
-                            : "other";
-
-                            <tr class="dry-run-preview-row"
-                                data-preview-category="@previewCategory">
+                            <tr class="dry-run-preview-row" data-preview-category="@row.Category">
                                 <td>
-                                    <strong>@item.Action</strong>
+                                    <span class="badge @row.BadgeClass">@row.BadgeLabel</span>
                                 </td>
-
-                                <td style="font-size:0.85em;">
-                                    @item.OriginalFilePath
+                                <td>
+                                    <div class="fw-bold">@row.DisplayTitle</div>
+                                    <div class="small text-muted text-truncate path-line" title="@row.Item.OriginalFilePath">
+                                        @row.SourceDisplay
+                                    </div>
                                 </td>
-
-                                <td style="font-size:0.85em; color:green;">
-                                    @if (!string.IsNullOrWhiteSpace(item.TargetPath))
+                                <td>
+                                    @if (row.TargetDisplay != null)
                                     {
-                                        @item.TargetPath
+                                        <div class="text-truncate path-line" title="@row.Item.TargetPath">→ @row.TargetDisplay</div>
+                                        <div class="small text-muted">@row.Note</div>
                                     }
                                     else
                                     {
-                                        <span class="text-muted">—</span>
+                                        <div class="text-truncate summary-line" title="@row.Note">@row.Note</div>
+                                        @if (row.AdditionalReasonCount > 0)
+                                        {
+                                            <div class="small text-muted">
+                                                +@row.AdditionalReasonCount more @(row.AdditionalReasonCount == 1 ? "reason" : "reasons")
+                                            </div>
+                                        }
                                     }
                                 </td>
-
-                                <td>
-                                    <div>@item.Status</div>
-
-                                    @if (item.NeedsReview)
+                                <td class="text-nowrap text-end">
+                                    @if (row.MovieDetailsId != null)
                                     {
-                                        <div class="alert alert-primary mt-2 mb-0 p-2" style="font-size:0.85em;">
-                                            <div class="fw-bold">Execution blocked — review required</div>
-                                            <div><strong>Parsed identity:</strong> @item.ParsedTitle (@(item.ParsedYear?.ToString() ?? "year unknown"))</div>
-                                            <div><strong>IMDb ID:</strong> @(string.IsNullOrWhiteSpace(item.ParsedImdbId) ? "Not determined" : item.ParsedImdbId)</div>
-                                            <div><strong>Edition:</strong> @(string.IsNullOrWhiteSpace(item.Edition) ? "Standard" : item.Edition)</div>
-                                            @if (item.MetadataConfidence.HasValue)
-                                            {
-                                                <div><strong>Metadata confidence:</strong> @item.MetadataConfidence.Value.ToString("0")%</div>
-                                            }
-                                            @if (!string.IsNullOrWhiteSpace(item.MetadataFailureDetail))
-                                            {
-                                                <div><strong>Metadata diagnostic:</strong> @item.MetadataFailureDetail</div>
-                                            }
-                                            @if (!string.IsNullOrWhiteSpace(item.MetadataDiscoveryReason))
-                                            {
-                                                <div><strong>Candidate discovery:</strong> @item.MetadataDiscoveryReason</div>
-                                            }
-                                            @if (item.HasMetadataSuggestion)
-                                            {
-                                                <div class="mt-1">
-                                                    <strong>Suggested match:</strong>
-                                                    @item.SuggestedTitle (@(item.SuggestedYear?.ToString() ?? "year unknown")) — @item.SuggestedImdbId
-                                                </div>
-                                            }
-                                            @if (item.IsDuplicate)
-                                            {
-                                                <div><strong>Duplicate decision:</strong> @(item.KeepRecommended ? "Recommended copy" : "Not selected as the preferred copy")</div>
-                                            }
-                                        </div>
-                                    }
-
-                                    @if (item.HasDestinationConflict)
-                                    {
-                                        <div class="alert alert-warning mt-2 mb-0 p-2" style="font-size:0.85em;">
-                                            <div class="fw-bold">Destination Conflict</div>
-
-                                            <div>
-                                                <strong>Reason:</strong>
-                                                @item.DestinationConflictReason
-                                            </div>
-
-                                            @if (!string.IsNullOrWhiteSpace(item.ExistingDestinationPath))
-                                            {
-                                                <div class="mt-1">
-                                                    <strong>Existing Path:</strong>
-                                                    <div class="text-break">@item.ExistingDestinationPath</div>
-                                                </div>
-                                            }
-
-                                            @if (!string.IsNullOrWhiteSpace(item.TargetPath))
-                                            {
-                                                <div class="mt-1">
-                                                    <strong>Proposed Path:</strong>
-                                                    <div class="text-break">@item.TargetPath</div>
-                                                </div>
-                                            }
-                                        </div>
-                                    }
-
-                                    @if (item.HasPlexLibraryConflict)
-                                    {
-                                        <div class="alert alert-info mt-2 mb-0 p-2" style="font-size:0.85em;">
-                                            <div class="fw-bold">
-                                                @(item.NeedsPlexDuplicateDecision
-                                                    ? "Possible duplicate — decide on the Movie Results tab"
-                                                    : "Plex Library Conflict")
-                                            </div>
-
-                                            <div>
-                                                <strong>Reason:</strong>
-                                                @item.PlexLibraryConflictReason
-                                            </div>
-
-                                            @if (!string.IsNullOrWhiteSpace(item.ExistingPlexLibraryPath))
-                                            {
-                                                <div class="mt-1">
-                                                    <strong>Existing Plex Path:</strong>
-                                                    <div class="text-break">@item.ExistingPlexLibraryPath</div>
-                                                </div>
-                                                <div>
-                                                    <strong>Plex copy:</strong> @(item.ExistingPlexResolution ?? "resolution unknown"), @PIM.Core.Models.VideoResolution.FormatSize(item.ExistingPlexSizeBytes)
-                                                </div>
-                                                <div>
-                                                    <strong>This file:</strong> @(item.SourceResolution ?? "resolution not in file name"), @PIM.Core.Models.VideoResolution.FormatSize(item.SourceSizeBytes)
-                                                </div>
-                                            }
-
-                                            @if (!string.IsNullOrWhiteSpace(item.TargetPath))
-                                            {
-                                                <div class="mt-1">
-                                                    <strong>Proposed Path:</strong>
-                                                    <div class="text-break">@item.TargetPath</div>
-                                                </div>
-                                            }
-                                        </div>
-                                    }
-
-                                    @if (item.IsPlexDuplicateAccepted)
-                                    {
-                                        <div class="alert alert-success mt-2 mb-0 p-2" style="font-size:0.85em;">
-                                            <div class="fw-bold">Adding alongside the existing Plex copy (your decision)</div>
-                                            <div class="text-break"><strong>Existing Plex Path:</strong> @item.ExistingPlexLibraryPath</div>
-                                            <div>
-                                                <strong>Plex copy:</strong> @(item.ExistingPlexResolution ?? "resolution unknown"), @PIM.Core.Models.VideoResolution.FormatSize(item.ExistingPlexSizeBytes)
-                                            </div>
-                                            <div>
-                                                <strong>This file:</strong> @(item.SourceResolution ?? "resolution not in file name"), @PIM.Core.Models.VideoResolution.FormatSize(item.SourceSizeBytes)
-                                            </div>
-                                        </div>
-                                    }
-
-                                    @if (item.IsPlexTrackedMigration)
-                                    {
-                                        <div class="alert alert-success mt-2 mb-0 p-2" style="font-size:0.85em;">
-                                            <div class="fw-bold">Plex-tracked migration</div>
-
-                                            <div>@item.PlexTrackedMigrationReason</div>
-
-                                            @if (!string.IsNullOrWhiteSpace(item.ExistingPlexLibraryPath))
-                                            {
-                                                <div class="mt-1">
-                                                    <strong>Existing Plex Path:</strong>
-                                                    <div class="text-break">@item.ExistingPlexLibraryPath</div>
-                                                </div>
-                                            }
-
-                                            @if (!string.IsNullOrWhiteSpace(item.TargetPath))
-                                            {
-                                                <div class="mt-1">
-                                                    <strong>Proposed Path:</strong>
-                                                    <div class="text-break">@item.TargetPath</div>
-                                                </div>
-                                            }
-                                        </div>
+                                        <a href="#movie-@row.Item.MovieId.ToString("N")"
+                                           class="btn btn-sm btn-outline-secondary"
+                                           data-show-movie="@row.MovieDetailsId">
+                                            See in Movie Results
+                                        </a>
                                     }
                                 </td>
                             </tr>
                         }
                     </tbody>
-
                 </table>
-
             </div>
-
         </div>
     </div>
 }
@@ -1396,72 +1234,91 @@
         }
 
         // =====================================================
-        // 🧪 DRY RUN PREVIEW CARD FILTERING
+        // 🧪 DRY RUN PREVIEW: FILTERS AND LINKS TO MOVIE RESULTS
         // =====================================================
-        let activeDryRunFilter = null;
-
-        const filterCards =
+        const previewFilterCards =
             document.querySelectorAll(".dry-run-filter-card");
 
         const previewRows =
             document.querySelectorAll(".dry-run-preview-row");
 
-        const filterStatus =
+        const previewFilterStatus =
             document.getElementById("dryRunFilterStatus");
 
-        filterCards.forEach(function (card) {
+        let activeDryRunFilter = null;
+
+        function applyDryRunFilter(filter) {
+            activeDryRunFilter = filter;
+
+            previewFilterCards.forEach(function (card) {
+                const isActive = card.dataset.previewFilter === filter;
+                card.classList.toggle("border-primary", isActive);
+                card.classList.toggle("shadow-sm", isActive);
+                card.setAttribute("aria-pressed", isActive.toString());
+            });
+
+            let visibleCount = 0;
+
+            previewRows.forEach(function (row) {
+                const isVisible =
+                    filter === null ||
+                    row.dataset.previewCategory === filter;
+                row.hidden = !isVisible;
+
+                if (isVisible) {
+                    visibleCount++;
+                }
+            });
+
+            if (previewFilterStatus) {
+                previewFilterStatus.textContent =
+                    filter === null
+                        ? `Showing all ${previewRows.length} files.`
+                        : `Showing ${visibleCount} of ${previewRows.length} files. ` +
+                          "Select the highlighted card again, or Show all, to see everything.";
+            }
+        }
+
+        previewFilterCards.forEach(function (card) {
             card.addEventListener("click", function () {
+                const selected = card.dataset.previewFilter;
+                applyDryRunFilter(activeDryRunFilter === selected ? null : selected);
+            });
+        });
 
-                const selectedFilter =
-                    card.dataset.previewFilter;
+        document.getElementById("dryRunFilterShowAll")
+            ?.addEventListener("click", function () {
+                applyDryRunFilter(null);
+            });
 
-                // Clicking the same card again clears the filter.
-                if (activeDryRunFilter === selectedFilter) {
-                    activeDryRunFilter = null;
-                } else {
-                    activeDryRunFilter = selectedFilter;
+        if (previewRows.length > 0) {
+            // Open on the files a live commit would actually move.
+            const previewDefault =
+                document.getElementById("dryRunFilterCards")?.dataset.defaultFilter ?? "all";
+            applyDryRunFilter(previewDefault === "all" ? null : previewDefault);
+        }
+
+        // "See in Movie Results": show that movie's row with its details open,
+        // where the item can be resolved.
+        document.querySelectorAll("[data-show-movie]").forEach(function (link) {
+            link.addEventListener("click", function (event) {
+                const toggle = detailsToggleFor(link.dataset.showMovie);
+                const row = document.querySelector(
+                    `[data-details-id="${link.dataset.showMovie}"]`);
+
+                if (!toggle || !row) {
+                    return;
                 }
 
-                // Reset all card visual states.
-                filterCards.forEach(function (c) {
-                    c.classList.remove("border-primary", "shadow");
-                });
+                event.preventDefault();
+                document.getElementById("movies-tab")?.click();
 
-                // Highlight the selected card.
-                if (activeDryRunFilter !== null) {
-                    card.classList.add("border-primary", "shadow");
+                if (row.hidden) {
+                    applyMovieFilter(null);
                 }
 
-                // Show/hide preview rows.
-                let visibleCount = 0;
-
-                previewRows.forEach(function (row) {
-
-                    const rowCategory =
-                        row.dataset.previewCategory;
-
-                    if (
-                        activeDryRunFilter === null ||
-                        rowCategory === activeDryRunFilter
-                    ) {
-                        row.style.display = "";
-                        visibleCount++;
-                    } else {
-                        row.style.display = "none";
-                    }
-                });
-
-                // Update helper text.
-                if (filterStatus) {
-                    if (activeDryRunFilter === null) {
-                        filterStatus.textContent =
-                            "Showing all dry run preview items.";
-                    } else {
-                        filterStatus.textContent =
-                            `Showing ${visibleCount} dry run preview item(s). ` +
-                            "Click the selected card again to clear the filter.";
-                    }
-                }
+                setDetailsOpen(toggle, true);
+                row.scrollIntoView({ block: "start", behavior: "smooth" });
             });
         });
 

@@ -48,6 +48,7 @@ public class DryRunPreviewService : IDryRunPreviewService
     {
         var item = new DryRunPreviewItem
         {
+            MovieId = movie.Id,
             FileName = movie.FileName ?? string.Empty,
             OriginalFilePath = movie.OriginalFilePath ?? string.Empty,
             TargetPath = movie.TargetPath ?? string.Empty,

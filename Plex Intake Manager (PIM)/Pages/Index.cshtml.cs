@@ -49,6 +49,25 @@ namespace PIM.Web.Pages
         public List<Movie> Movies { get; set; } = new();
 
         /// <summary>
+        /// Dry Run Preview lines: moves first, then reviews, errors, and skips.
+        /// Display only.
+        /// </summary>
+        public IReadOnlyList<DryRunPreviewRow> PreviewRows =>
+            (DryRunPreview?.Items ?? new List<DryRunPreviewItem>())
+                .Select(item => DryRunPreviewRow.Create(
+                    item,
+                    ScanPath,
+                    ActiveDestinationProfile.DestinationRoot))
+                .OrderBy(row => row.Category switch
+                {
+                    "move" => 0,
+                    "review" => 1,
+                    "error" => 2,
+                    _ => 3
+                })
+                .ToList();
+
+        /// <summary>
         /// Movie Results rows, things needing the owner first. Display only.
         /// </summary>
         public IReadOnlyList<MovieResultRow> ResultRows =>
