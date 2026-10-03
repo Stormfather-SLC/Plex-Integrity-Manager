@@ -2,6 +2,12 @@
 
 public class DryRunPreviewItem
 {
+    /// <summary>
+    /// The movie this item describes, so the page can link to its row.
+    /// Empty for previews saved before this field existed.
+    /// </summary>
+    public Guid MovieId { get; set; }
+
     public string FileName { get; set; } = string.Empty;
 
     public string OriginalFilePath { get; set; } = string.Empty;
