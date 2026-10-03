@@ -150,8 +150,15 @@ Follow this roadmap unless the user explicitly changes the priority:
 - Needs Review visibility and behavior (roadmap item 3): COMPLETE for MVP, manual checks passed and confirmed by the owner on 2026-09-27.
   - PRs #21–#24 and #28: problem items first with filter cards, Keep This Copy for duplicate ties, manual IMDb ID entry, stale-tie fix, Confirm File Name.
   - Related safety fixes found along the way: #26 (Plex check can no longer be skipped silently), #27 (release tags stripped from parsed titles).
-- Roadmap items 4 (IMDb confidence) and 5 (OutputPath without re-enrichment) are not yet confirmed; much of their work landed in #14, #23, #25, and #27.
-- Current priority: Review execution safety and logging (roadmap item 6), started 2026-09-27 at the owner's direction.
+- IMDb ID confidence handling (roadmap item 4): COMPLETE for MVP, confirmed by the owner on 2026-10-03.
+  - #14, #23, #27, #31 (an unconfirmed title match can no longer confirm itself), #36 (weak first matches run recovery; an exact title one year off is suggested at 90% but always needs confirmation).
+- OutputPath changes without re-enrichment (roadmap item 5): COMPLETE for MVP, confirmed by the owner on 2026-10-03 (#25 pins it with a test).
+- Execution safety and logging (roadmap item 6): COMPLETE for MVP, confirmed by the owner on 2026-10-03.
+  - #26 (Plex check fails closed), #29 (journal records every scanned item, including skipped ones), #30 (source file re-verified before every move; folders created only after the journal gate), #33 (possible Plex duplicates are an explicit, journaled user decision; hard stops stay non-overridable).
+  - Deferred by the owner: moving RenameService progress output from Console.WriteLine to ILogger levels. The operation journal remains the audit record.
+- Review UI: compact Movie Results (#34, #35) and Dry Run Preview (#37), with possible-duplicate details (#32).
+- **PIM MVP — TRUSTWORTHY (roadmap item 7): REACHED, confirmed by the owner on 2026-10-03.**
+- Current priority: Dogfood heavily against the owner's own Plex library (roadmap item 8). Agents still follow "Media, filesystem, and Plex safety": no access to real media paths unless the owner authorizes the exact source and destination.
 
 Update this status only when the user explicitly confirms that a roadmap milestone has been completed or reprioritized.
 
