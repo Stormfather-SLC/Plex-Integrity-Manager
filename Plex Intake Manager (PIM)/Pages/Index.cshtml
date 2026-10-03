@@ -225,6 +225,10 @@
         min-width: 9rem;
     }
 
+    .count-blocked {
+        color: #997404;
+    }
+
     .movie-results .summary-line,
     .movie-results .path-line {
         max-width: 80ch;
@@ -680,7 +684,7 @@
                 var stateCards = new[]
                 {
                     (Key: "decide", Label: "Your decision", Css: "text-primary", Hint: "PIM needs you to choose; use the buttons on each row"),
-                    (Key: "blocked", Label: "Blocked", Css: "text-warning-emphasis", Hint: "Fix the cause outside PIM, then run a new dry run"),
+                    (Key: "blocked", Label: "Blocked", Css: "count-blocked", Hint: "Fix the cause outside PIM, then run a new dry run"),
                     (Key: "error", Label: "Errors", Css: "text-danger", Hint: "Could not be processed"),
                     (Key: "ready", Label: "Ready", Css: "text-success", Hint: "Will be moved by a live commit after a dry run"),
                     (Key: "skipped", Label: "Skipped", Css: "text-secondary", Hint: "Duplicate copies left where they are; nothing is deleted"),
@@ -751,7 +755,7 @@
                                     <span class="badge @row.BadgeClass">@row.StateLabel</span>
                                 </td>
                                 <td>
-                                    <div class="fw-semibold">
+                                    <div class="fw-bold">
                                         @row.DisplayTitle
                                         @if (movie.Year.HasValue && !string.IsNullOrWhiteSpace(movie.Title))
                                         {
@@ -759,11 +763,11 @@
                                         }
                                         @if (!string.IsNullOrWhiteSpace(movie.VersionTag))
                                         {
-                                            <span class="badge text-bg-light border fw-normal ms-1">@movie.VersionTag</span>
+                                            <span class="badge bg-light text-dark border fw-normal ms-1">@movie.VersionTag</span>
                                         }
                                         @if (!string.IsNullOrWhiteSpace(movie.SourceResolution))
                                         {
-                                            <span class="badge text-bg-light border fw-normal ms-1">@movie.SourceResolution</span>
+                                            <span class="badge bg-light text-dark border fw-normal ms-1">@movie.SourceResolution</span>
                                         }
                                     </div>
                                     <div class="small text-muted text-truncate path-line" title="@movie.OriginalFilePath">
@@ -828,12 +832,17 @@
                                         }
                                         @if (row.CanAcceptSuggestion)
                                         {
-                                            <form method="post" asp-page-handler="AcceptSuggestedMatch" class="d-inline">
+                                            <form method="post"
+                                                  asp-page-handler="AcceptSuggestedMatch"
+                                                  class="d-inline"
+                                                  data-confirm="@(row.IsLowConfidenceSuggestion
+                                                      ? $"This is only a {movie.MatchConfidence:0}% match. Accept \"{movie.SuggestedTitle} ({movie.SuggestedYear})\", {movie.SuggestedImdbId}, as the identity of {movie.FileName}?"
+                                                      : null)">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="movieId" value="@movie.Id" />
                                                 <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
                                                 <button type="submit"
-                                                        class="btn btn-sm btn-primary"
+                                                        class="btn btn-sm @(row.IsLowConfidenceSuggestion ? "btn-outline-primary" : "btn-primary")"
                                                         title="Accept @movie.SuggestedTitle (@movie.SuggestedYear), @movie.SuggestedImdbId">
                                                     Accept match
                                                 </button>
@@ -882,7 +891,7 @@
                                             }
                                             @if (row.Reasons.Count > 0)
                                             {
-                                                <div class="fw-semibold">Why this needs attention</div>
+                                                <div class="fw-bold">Why this needs attention</div>
                                                 <ul class="mb-2 ps-3">
                                                     @foreach (var reason in row.Reasons)
                                                     {
@@ -904,7 +913,7 @@
                                                     Check the file, then use <strong>Confirm name</strong>.
                                                 </p>
                                             }
-                                            @if (movie.HasMetadataSuggestion)
+                                            @if (row.IsIdentityUnconfirmed && movie.HasMetadataSuggestion)
                                             {
                                                 <p class="mb-2">
                                                     <strong>Suggested match:</strong>
@@ -953,7 +962,7 @@
                                             @if (showPlex)
                                             {
                                                 <div class="border rounded p-2 mb-2 bg-white">
-                                                    <div class="fw-semibold">
+                                                    <div class="fw-bold">
                                                         @(movie.NeedsPlexDuplicateDecision
                                                             ? "Possible duplicate: your decision"
                                                             : movie.IsPlexDuplicateAccepted
@@ -981,11 +990,17 @@
                                                             @PIM.Core.Models.VideoResolution.FormatSize(movie.FileSizeBytes)
                                                         </div>
                                                     }
-                                                    @if (movie.NeedsPlexDuplicateDecision)
+                                                    @if (row.CanAddPlexDuplicate)
                                                     {
                                                         <div class="mt-1">
                                                             This file is <strong>skipped</strong> unless you choose <strong>Add anyway</strong>.
                                                             Adding it moves it to the proposed path and Plex will then have both copies. Nothing is deleted.
+                                                        </div>
+                                                    }
+                                                    else if (movie.NeedsPlexDuplicateDecision)
+                                                    {
+                                                        <div class="mt-1">
+                                                            Confirm which movie this is first. The choice to add it alongside the Plex copy becomes available once its identity is confirmed.
                                                         </div>
                                                     }
                                                     @if (movie.IsPlexDuplicateAccepted)
@@ -997,7 +1012,7 @@
                                             @if (movie.HasDestinationConflict)
                                             {
                                                 <div class="border rounded p-2 mb-2 bg-white">
-                                                    <div class="fw-semibold">Destination conflict</div>
+                                                    <div class="fw-bold">Destination conflict</div>
                                                     <div>@movie.DestinationConflictReason</div>
                                                     @if (!string.IsNullOrWhiteSpace(movie.ExistingDestinationPath))
                                                     {
@@ -1005,7 +1020,7 @@
                                                     }
                                                 </div>
                                             }
-                                            <div class="fw-semibold">Paths</div>
+                                            <div class="fw-bold">Paths</div>
                                             <div class="text-break"><span class="text-muted">From:</span> @movie.OriginalFilePath</div>
                                             <div class="text-break">
                                                 <span class="text-muted">To:</span>
@@ -1317,7 +1332,13 @@
         // After a row action posts back, return to the same place with the
         // same details open instead of jumping to the top of the page.
         document.querySelectorAll("#movies-pane form").forEach(function (form) {
-            form.addEventListener("submit", function () {
+            form.addEventListener("submit", function (event) {
+                // Low-confidence matches need an explicit second confirmation.
+                if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
+                    event.preventDefault();
+                    return;
+                }
+
                 const openDetails = Array.from(
                     document.querySelectorAll("[data-toggle-details][aria-expanded='true']"))
                     .map(function (toggle) { return toggle.dataset.toggleDetails; });

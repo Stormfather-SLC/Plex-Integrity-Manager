@@ -28,14 +28,90 @@ public sealed class MovieResultRowTests
         movie.SuggestedTitle = "Gladiator Eroticvs: The Lesbian Warriors";
         movie.SuggestedYear = 2001;
         movie.SuggestedImdbId = "tt0256056";
+        movie.MatchConfidence = 21;
         movie.SetMetadataReview("Low confidence metadata match (21% confidence)", MetadataLookupFailureType.LowConfidence);
 
         var row = Row(movie);
 
         Assert.Equal(MovieResultState.Decide, row.State);
         Assert.True(row.CanAcceptSuggestion);
+        Assert.True(row.IsLowConfidenceSuggestion);
         Assert.True(row.CanEnterImdbId);
-        Assert.Equal("Possible match: Gladiator Eroticvs: The Lesbian Warriors (2001)", row.Summary);
+        Assert.Equal(
+            "Possible match: Gladiator Eroticvs: The Lesbian Warriors (2001), 21% match",
+            row.Summary);
+    }
+
+    [Fact]
+    public void ConfidentSuggestion_IsNotFlaggedAsLowConfidence()
+    {
+        var movie = Unidentified("Back to the Future", 1986);
+        movie.SuggestedTitle = "Back to the Future";
+        movie.SuggestedYear = 1985;
+        movie.SuggestedImdbId = "tt0088763";
+        movie.MatchConfidence = 90;
+        movie.SetMetadataReview("Possible OMDb match: Back to the Future (1985)", MetadataLookupFailureType.FuzzyCandidateYearConflict);
+
+        var row = Row(movie);
+
+        Assert.True(row.CanAcceptSuggestion);
+        Assert.False(row.IsLowConfidenceSuggestion);
+    }
+
+    [Fact]
+    public void IdentifiedPossibleDuplicate_DoesNotOfferAcceptMatch()
+    {
+        // OMDb also stores a confirmed identity in the suggestion fields.
+        var movie = PossiblePlexDuplicate();
+        movie.SuggestedTitle = movie.Title;
+        movie.SuggestedYear = movie.Year;
+        movie.SuggestedImdbId = movie.ImdbId;
+
+        var row = Row(movie);
+
+        Assert.Equal(MovieResultState.Decide, row.State);
+        Assert.True(row.CanAddPlexDuplicate);
+        Assert.False(row.CanAcceptSuggestion);
+        Assert.False(row.CanEnterImdbId);
+        Assert.StartsWith("Possible duplicate", row.Summary);
+    }
+
+    [Fact]
+    public void UnconfirmedIdentity_ComesBeforeADuplicateDecision()
+    {
+        var movie = PossiblePlexDuplicate();
+        movie.Title = "Pulp Ficton";
+        movie.SuggestedTitle = "Pulp Fiction";
+        movie.SuggestedYear = 1994;
+        movie.SuggestedImdbId = "tt0110912";
+        movie.SetMetadataReview(
+            "The provided IMDb ID does not match the movie title provided.",
+            MetadataLookupFailureType.ImdbIdentityConflict);
+
+        var row = Row(movie);
+
+        Assert.Equal(MovieResultState.Decide, row.State);
+        Assert.True(row.IsIdentityUnconfirmed);
+        Assert.True(row.CanAcceptSuggestion);
+        Assert.False(row.CanAddPlexDuplicate);
+        Assert.StartsWith("Possible match: Pulp Fiction (1994)", row.Summary);
+    }
+
+    [Fact]
+    public void BadgeClasses_WorkWithTheBundledBootstrapVersion()
+    {
+        var rows = new[]
+        {
+            Row(Identified()),
+            Row(PossiblePlexDuplicate()),
+            Row(new Movie { OriginalFilePath = Path.Combine(SourceRoot, "x.mkv"), ErrorMessage = "x" })
+        };
+
+        Assert.All(rows, row =>
+        {
+            Assert.DoesNotContain("text-bg-", row.BadgeClass);
+            Assert.StartsWith("bg-", row.BadgeClass);
+        });
     }
 
     [Fact]
@@ -241,6 +317,18 @@ public sealed class MovieResultRowTests
             MatchConfidence = 100,
             ApprovedForCommit = true
         };
+    }
+
+    private static Movie PossiblePlexDuplicate()
+    {
+        var movie = Identified();
+        movie.ApprovedForCommit = false;
+        movie.IsPossiblePlexDuplicate = true;
+        movie.HasPlexLibraryConflict = true;
+        movie.ExistingPlexResolution = "1080p";
+        movie.ExistingPlexSizeBytes = 7_200_000_000;
+        movie.RequireReview("Plex library conflict: Possible duplicate.");
+        return movie;
     }
 
     private static Movie Unidentified(string? title, int? year)
