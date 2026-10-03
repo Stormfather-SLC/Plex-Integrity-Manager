@@ -187,6 +187,12 @@ public sealed class MovieResultRow
         if (movie.HasError)
             return MovieResultState.Error;
 
+        // Never looked up (for example, Identify was stopped before reaching
+        // it): its identity comes only from the file name, so it is neither
+        // ready nor a decision yet, whatever the plan derived from that name.
+        if (IsNotLookedUp(movie))
+            return MovieResultState.Pending;
+
         if (movie.NeedsReview)
         {
             var hasAction = actions.CanAcceptSuggestion ||
@@ -206,6 +212,16 @@ public sealed class MovieResultRow
 
         return MovieResultState.Pending;
     }
+
+    /// <summary>
+    /// No metadata lookup has run for this movie yet: nothing fetched, no
+    /// match recorded, and no lookup outcome or lookup-owned review reason.
+    /// </summary>
+    public static bool IsNotLookedUp(Movie movie) =>
+        !movie.MetadataFetched &&
+        movie.MetadataMatchOrigin == MetadataMatchOrigin.None &&
+        movie.MetadataLookupFailureType == MetadataLookupFailureType.None &&
+        string.IsNullOrWhiteSpace(movie.MetadataReviewReason);
 
     private static string BuildSummary(
         Movie movie,

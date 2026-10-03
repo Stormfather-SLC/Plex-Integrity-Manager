@@ -168,7 +168,9 @@ namespace PIM.Web.Pages
                 total = _progress.Total,
                 processed = _progress.Processed,
                 currentFile = _progress.CurrentFile,
-                isRunning = _progress.IsRunning
+                isRunning = _progress.IsRunning,
+                canCancel = _progress.CanCancel,
+                cancelRequested = _progress.CancelRequested
             });
         }
 
@@ -270,6 +272,8 @@ namespace PIM.Web.Pages
 
             ResetProgress();
             _progress.IsRunning = true;
+            var cancellation = _progress.BeginCancellableOperation();
+            var lookup = new LookupOutcome(0, 0, false);
 
             try
             {
@@ -278,7 +282,19 @@ namespace PIM.Web.Pages
                 var moviesToEnrich = GetMoviesRequiringMetadata(movies, profile);
 
                 if (moviesToEnrich.Count > 0)
-                    await EnrichMoviesAsync(moviesToEnrich);
+                    lookup = await EnrichMoviesAsync(moviesToEnrich, cancellation);
+
+                // Cancel applies to the lookups only. Completed lookups are always
+                // planned and saved below so stopping never loses finished work.
+                _progress.EndCancellableOperation();
+
+                if (lookup.Cancelled)
+                {
+                    _logger.LogInformation(
+                        "Movie identification stopped by the user after {Completed} of {Total} lookup(s).",
+                        lookup.Completed,
+                        lookup.Total);
+                }
 
                 _progress.CurrentFile = "Checking duplicates and destination conflicts...";
 
@@ -303,13 +319,36 @@ namespace PIM.Web.Pages
                 // analysis, path generation, Plex validation, and the final cache write
                 // have all completed. Otherwise the browser can reload stale scan state
                 // while conflict detection is still running.
+                _progress.EndCancellableOperation();
                 ResetProgress(isRunning: false);
+            }
+
+            if (lookup.Cancelled)
+            {
+                TempData["Message"] =
+                    $"Identify Movies was stopped after {lookup.Completed} of {lookup.Total} lookup(s). " +
+                    "Finished lookups were saved; movies not looked up yet show as Not identified. " +
+                    "Run Identify Movies again to continue.";
             }
 
             return RedirectToPage(new
             {
                 showOnlyRecommended = ShowOnlyRecommended
             });
+        }
+
+        /// <summary>
+        /// Asks a running Identify (or the lookup step of a dry run) to stop
+        /// after the movie currently being looked up.
+        /// </summary>
+        public JsonResult OnPostCancel()
+        {
+            var requested = _progress.RequestCancel();
+
+            if (requested)
+                _logger.LogInformation("User asked to stop the running movie lookups.");
+
+            return new JsonResult(new { requested });
         }
 
         public async Task<IActionResult> OnPostAcceptSuggestedMatchAsync(Guid movieId)
@@ -641,8 +680,43 @@ namespace PIM.Web.Pages
 
                 if (moviesToEnrich.Count > 0)
                 {
-                    await EnrichMoviesAsync(moviesToEnrich);
-                    ResetProgress(isRunning: false);
+                    LookupOutcome lookup;
+                    _progress.IsRunning = true;
+                    var cancellation = _progress.BeginCancellableOperation();
+
+                    try
+                    {
+                        lookup = await EnrichMoviesAsync(moviesToEnrich, cancellation);
+                    }
+                    finally
+                    {
+                        _progress.EndCancellableOperation();
+                        ResetProgress(isRunning: false);
+                    }
+
+                    // A dry run stopped part-way must never authorise a live
+                    // commit. Keep the finished lookups, but create no approval.
+                    if (lookup.Cancelled)
+                    {
+                        _moviePlan.Rebuild(movies, profile, sourceRoot, libraryGoal);
+                        SetCachedMovies(movies);
+                        InvalidateDryRunApproval();
+
+                        _logger.LogInformation(
+                            "Dry run stopped by the user during movie lookups after {Completed} of {Total}; no dry-run approval was created.",
+                            lookup.Completed,
+                            lookup.Total);
+
+                        TempData["Message"] =
+                            $"The dry run was stopped after {lookup.Completed} of {lookup.Total} movie lookup(s). " +
+                            "No files were changed and no dry-run approval was created. Finished lookups were saved; " +
+                            "run the dry run again when you're ready.";
+
+                        return RedirectToPage(new
+                        {
+                            showOnlyRecommended = ShowOnlyRecommended
+                        });
+                    }
                 }
             }
 
@@ -956,7 +1030,17 @@ namespace PIM.Web.Pages
                 .ToList();
         }
 
-        private async Task EnrichMoviesAsync(List<Movie> moviesToEnrich)
+        /// <summary>Result of a metadata lookup pass.</summary>
+        private readonly record struct LookupOutcome(int Completed, int Total, bool Cancelled);
+
+        /// <summary>
+        /// Looks up each movie in turn. Cancellation is honoured only between
+        /// movies, so a movie is never left half-identified: it was either
+        /// looked up completely or not at all.
+        /// </summary>
+        private async Task<LookupOutcome> EnrichMoviesAsync(
+            List<Movie> moviesToEnrich,
+            CancellationToken cancellationToken)
         {
             _progress.Total = moviesToEnrich.Count;
             _progress.Processed = 0;
@@ -965,14 +1049,28 @@ namespace PIM.Web.Pages
             var delayMs = _config.GetValue<int>(
                 "PIM:MetadataDelayMs",
                 DefaultMetadataDelayMs);
+            var completed = 0;
 
             foreach (var movie in moviesToEnrich)
             {
+                if (cancellationToken.IsCancellationRequested)
+                    return new LookupOutcome(completed, moviesToEnrich.Count, true);
+
                 _progress.CurrentFile = movie.FileName ?? string.Empty;
                 await _metadata.EnrichAsync(movie);
+                completed++;
 
                 if (delayMs > 0)
-                    await Task.Delay(delayMs);
+                {
+                    try
+                    {
+                        await Task.Delay(delayMs, cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Finish recording this movie's result below, then stop.
+                    }
+                }
 
                 if (string.IsNullOrWhiteSpace(movie.ImdbId) &&
                     !movie.HasMetadataReviewReason)
@@ -994,6 +1092,11 @@ namespace PIM.Web.Pages
 
                 _progress.Processed++;
             }
+
+            return new LookupOutcome(
+                completed,
+                moviesToEnrich.Count,
+                cancellationToken.IsCancellationRequested && completed < moviesToEnrich.Count);
         }
 
         private void ResetProgress(bool isRunning = false)
