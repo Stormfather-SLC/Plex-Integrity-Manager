@@ -93,6 +93,45 @@
             });
         }
 
+        // Opened or refreshed while PIM is already working (for example in a
+        // second tab): start locked, follow the progress, and reload when the
+        // action ends so its results are shown.
+        const busyWithAtLoad = workflowStatus.dataset.busyWith;
+
+        if (busyWithAtLoad) {
+            window.pimBusy?.lock();
+
+            const busyWatchTimer = window.setInterval(async function () {
+                try {
+                    const response = await fetch(cancelProgressUrl.toString(), {
+                        cache: "no-store",
+                        credentials: "same-origin"
+                    });
+
+                    if (!response.ok) {
+                        return;
+                    }
+
+                    const progress = await response.json();
+                    setCancelState(progress);
+
+                    if (progress.busy !== true) {
+                        window.clearInterval(busyWatchTimer);
+                        window.location.reload();
+                        return;
+                    }
+
+                    const busyWith = progress.busyWith || busyWithAtLoad;
+                    workflowStatus.textContent = Number(progress.total) > 0
+                        ? `PIM is busy with ${busyWith}: ` +
+                            `${Number(progress.processed) || 0} of ${Number(progress.total)}...`
+                        : `PIM is busy with ${busyWith}...`;
+                } catch {
+                    // Try again on the next tick.
+                }
+            }, 1000);
+        }
+
         // Own the Identify click in the capture phase so the legacy inline handler
         // cannot start a second progress poll that may reload stale scan results.
         enrichButton.addEventListener("click", async function (event) {
@@ -104,6 +143,9 @@
             }
 
             enrichButton.dataset.pimIdentifying = "true";
+            // One action at a time: everything except Cancel is disabled
+            // until identification ends.
+            window.pimBusy?.lock();
             enrichButton.disabled = true;
 
             const startedAt = Date.now();
@@ -249,6 +291,7 @@
                         ? error.message
                         : "An unexpected browser error occurred.");
 
+                window.pimBusy?.unlock();
                 enrichButton.disabled = false;
                 enrichButton.dataset.pimIdentifying = "false";
                 console.error("PIM identify request failed.", error);

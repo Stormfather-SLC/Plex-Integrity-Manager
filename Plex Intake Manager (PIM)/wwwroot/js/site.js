@@ -4,6 +4,69 @@
 (function () {
     "use strict";
 
+    // =====================================================
+    // One action at a time. While PIM is scanning, identifying, running a
+    // dry run, committing, or saving a decision, every control on the page
+    // except Cancel is disabled. The server refuses overlapping actions as
+    // well; this keeps the page honest about it.
+    // =====================================================
+    const pimBusy = {
+        get locked() {
+            return document.body.dataset.pimBusy === "true";
+        },
+
+        lock() {
+            document.body.dataset.pimBusy = "true";
+
+            (document.querySelector("main") ?? document.body)
+                .querySelectorAll("button, input:not([type='hidden']), select, textarea")
+                .forEach(function (control) {
+                    // Controls that were already disabled stay that way after
+                    // unlock, so only the ones disabled here are marked.
+                    if (control.id === "cancelBtn" || control.disabled) {
+                        return;
+                    }
+
+                    control.disabled = true;
+                    control.dataset.pimLocked = "true";
+                });
+        },
+
+        unlock() {
+            delete document.body.dataset.pimBusy;
+
+            document.querySelectorAll("[data-pim-locked]").forEach(function (control) {
+                control.disabled = false;
+                delete control.dataset.pimLocked;
+            });
+        }
+    };
+
+    window.pimBusy = pimBusy;
+
+    // Review decisions and Save Settings are ordinary form posts. Lock the
+    // page once the browser has collected the form's fields (a disabled
+    // field is not submitted), until the reloaded page replaces this one.
+    document.addEventListener("submit", function (event) {
+        const workflowStatus = document.getElementById("workflowStatus");
+
+        if (event.defaultPrevented || !workflowStatus) {
+            return;
+        }
+
+        window.setTimeout(function () {
+            pimBusy.lock();
+            workflowStatus.textContent = "Working...";
+        }, 0);
+    });
+
+    // A page restored by the browser's Back button must not come back locked.
+    window.addEventListener("pageshow", function (event) {
+        if (event.persisted) {
+            pimBusy.unlock();
+        }
+    });
+
     document.addEventListener("DOMContentLoaded", function () {
         initializeSourceCleanupSetting();
 
@@ -55,8 +118,7 @@
             }
 
             commitForm.dataset.pimSubmitting = "true";
-            dryRunButton.disabled = true;
-            liveButton.disabled = true;
+            pimBusy.lock();
 
             const applyButton = submitter;
             const originalButtonText = applyButton.innerHTML;
@@ -227,10 +289,13 @@
                         ? error.message
                         : "An unexpected browser error occurred.");
                 applyButton.innerHTML = originalButtonText;
-                dryRunButton.disabled = false;
-                // The live button only returns if the server enabled it.
-                liveButton.disabled = liveButton.dataset.expiresAt === undefined ||
-                    liveButton.dataset.expiresAt === "";
+                pimBusy.unlock();
+
+                // The live button only returns while its approval is current.
+                if (!liveButton.dataset.expiresAt) {
+                    liveButton.disabled = true;
+                }
+
                 commitForm.dataset.pimSubmitting = "false";
 
                 console.error("PIM commit request failed.", error);
@@ -305,7 +370,8 @@
                     body: JSON.stringify({ enabled: requestedValue })
                 });
 
-                if (!response.ok) {
+                // 409: PIM is busy with another action and changed nothing.
+                if (!response.ok && response.status !== 409) {
                     throw new Error(`HTTP ${response.status}`);
                 }
 
@@ -318,7 +384,12 @@
                     "The cleanup setting could not be saved. The previous value remains active.";
                 console.error("PIM source cleanup setting could not be saved.", error);
             } finally {
-                checkbox.disabled = false;
+                // Stay disabled if another action locked the page meanwhile.
+                checkbox.disabled = pimBusy.locked;
+
+                if (pimBusy.locked) {
+                    checkbox.dataset.pimLocked = "true";
+                }
             }
         });
     }
@@ -342,6 +413,9 @@
             if (remainingMs <= 0) {
                 liveButton.disabled = true;
                 liveButton.dataset.expiresAt = "";
+                // Expired while the page was locked: unlocking must not
+                // bring the button back.
+                delete liveButton.dataset.pimLocked;
 
                 if (status) {
                     status.className = "small mt-2 text-muted";

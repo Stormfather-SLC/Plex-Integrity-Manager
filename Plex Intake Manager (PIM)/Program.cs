@@ -81,8 +81,24 @@ app.MapPost(
     "/api/settings/source-cleanup",
     async (
         SourceCleanupSettingRequest request,
-        IConfiguration configuration) =>
+        IConfiguration configuration,
+        ScanProgress progress) =>
     {
+        // The cleanup setting is read by a live commit as it finishes, so it
+        // must not change while one (or any other action) is in progress.
+        if (!progress.TryBeginAction("a settings change"))
+        {
+            return Results.Json(
+                new
+                {
+                    enabled = configuration.GetValue(
+                        "PIM:RemoveEmptySourceFolders",
+                        true),
+                    message = "PIM is busy. The cleanup setting was not changed; try again when it finishes."
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
         var settingsPath = Path.Combine(
             userSettingsDirectory,
             "cleanup-settings.json");
@@ -130,6 +146,10 @@ app.MapPost(
 
             return Results.Problem(
                 $"The source cleanup setting could not be saved: {ex.Message}");
+        }
+        finally
+        {
+            progress.EndAction();
         }
     });
 
