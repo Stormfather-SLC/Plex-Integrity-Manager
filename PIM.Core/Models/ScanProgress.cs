@@ -28,6 +28,15 @@ namespace PIM.Core.Models
 
         public bool IsRunning { get; set; }
 
+        /// <summary>
+        /// Which part of the running action <see cref="Processed"/> and
+        /// <see cref="Total"/> belong to, in words for the page (for example
+        /// "Step 1 of 3: Looking up 12 movies"). Without it a count of movie
+        /// lookups reads like the number of files being moved. Empty when
+        /// idle or when the action has a single part.
+        /// </summary>
+        public string Step { get; set; } = string.Empty;
+
         private int _busy;
         private string? _busyWith;
 
@@ -64,6 +73,7 @@ namespace PIM.Core.Models
         /// </summary>
         public void EndAction()
         {
+            Step = string.Empty;
             Volatile.Write(ref _busyWith, null);
             Volatile.Write(ref _busy, 0);
         }

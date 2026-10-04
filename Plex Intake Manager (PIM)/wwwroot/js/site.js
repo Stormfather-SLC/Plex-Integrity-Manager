@@ -147,6 +147,12 @@
                 const elapsed = formatTime(elapsedSeconds);
                 const data = latestProgress;
 
+                // The server names the step the numbers belong to, so a count
+                // of movie lookups is never read as the number of files moved.
+                const stepHeading = data.step
+                    ? `<div><strong>${escapeHtml(data.step)}</strong></div>`
+                    : "";
+
                 if (data.isRunning && data.total > 0) {
                     const processed = Math.max(0, Number(data.processed) || 0);
                     const total = Math.max(0, Number(data.total) || 0);
@@ -156,7 +162,10 @@
                     const hasCurrentFile = processed < total && data.currentFile;
 
                     workflowStatus.innerHTML =
-                        `<div><strong>Processed ${processed} of ${total}</strong></div>` +
+                        (stepHeading
+                            ? stepHeading +
+                                `<div>${processed.toLocaleString()} of ${total.toLocaleString()}</div>`
+                            : `<div><strong>Processed ${processed} of ${total}</strong></div>`) +
                         `<div class="progress mt-1 mb-2" style="height:20px;" ` +
                             `role="progressbar" aria-label="Overall batch progress" ` +
                             `aria-valuenow="${percent}" aria-valuemin="0" aria-valuemax="100">` +
@@ -177,8 +186,10 @@
 
                 if (data.isRunning) {
                     workflowStatus.innerHTML =
-                        "<strong>Scanning destination for conflicts...</strong><br>" +
-                        `Entries Checked: ${Number(data.processed) || 0}<br>` +
+                        (stepHeading ||
+                            "<strong>Scanning destination for conflicts...</strong><br>") +
+                        "Scanning the destination folder. Entries checked: " +
+                        `${(Number(data.processed) || 0).toLocaleString()}<br>` +
                         `Current Location: ${escapeHtml(data.currentFile || "Starting...")}<br>` +
                         `<div class="progress mt-1 mb-2" style="height:12px;" ` +
                             `role="progressbar" aria-label="Destination scan is running">` +
@@ -190,8 +201,9 @@
                 }
 
                 workflowStatus.innerHTML =
-                    `<strong>${isDryRun ? "Preparing dry run" : "Preparing live commit"}...</strong><br>` +
-                    "PIM is checking the destination and preparing the approved plan.<br>" +
+                    (stepHeading ||
+                        `<strong>${isDryRun ? "Preparing dry run" : "Preparing live commit"}...</strong><br>` +
+                        "PIM is checking the destination and preparing the approved plan.<br>") +
                     `<div class="progress mt-1 mb-2" style="height:12px;" ` +
                         `role="progressbar" aria-label="PIM is preparing the operation">` +
                         `<div class="progress-bar progress-bar-striped progress-bar-animated" ` +

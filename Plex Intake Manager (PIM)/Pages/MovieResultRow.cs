@@ -223,6 +223,21 @@ public sealed class MovieResultRow
         movie.MetadataLookupFailureType == MetadataLookupFailureType.None &&
         string.IsNullOrWhiteSpace(movie.MetadataReviewReason);
 
+    /// <summary>
+    /// The lookup did not get an answer from OMDb (connection, service, key,
+    /// or request-limit trouble), so trying again later can succeed. A lookup
+    /// that was answered, such as "not found" or a possible match, cannot.
+    /// </summary>
+    public static bool IsRetryableLookupFailure(Movie movie) =>
+        movie.MetadataLookupFailureType is
+            MetadataLookupFailureType.RequestLimitReached or
+            MetadataLookupFailureType.InvalidApiKey or
+            MetadataLookupFailureType.OmdbError or
+            MetadataLookupFailureType.HttpFailure or
+            MetadataLookupFailureType.NetworkFailure or
+            MetadataLookupFailureType.Timeout or
+            MetadataLookupFailureType.MalformedResponse;
+
     private static string BuildSummary(
         Movie movie,
         MovieResultState state,
@@ -254,9 +269,14 @@ public sealed class MovieResultRow
                                $"({movie.SuggestedYear?.ToString() ?? "year unknown"}){confidence}{yearNote}";
                     }
 
-                    return movie.MetadataReviewReason ??
-                           reasons.FirstOrDefault() ??
-                           "Identity needs review";
+                    var identityReason = movie.MetadataReviewReason ??
+                                         reasons.FirstOrDefault() ??
+                                         "Identity needs review";
+
+                    // A dry run does not repeat lookups, so say how to.
+                    return IsRetryableLookupFailure(movie)
+                        ? $"{identityReason}; run Identify Movies to try again"
+                        : identityReason;
                 }
 
                 if (movie.HasDuplicateTieReview)
