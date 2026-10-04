@@ -12,7 +12,7 @@ using Xunit;
 
 namespace PIM.Tests;
 
-public sealed class IndexModelSafetyTests
+public sealed partial class IndexModelSafetyTests
 {
     [Fact]
     public async Task LiveCommitWithoutMatchingDryRun_IsRejectedBeforeRenameService()
@@ -1235,13 +1235,14 @@ public sealed class IndexModelSafetyTests
         IRenameService? rename = null,
         IMoviePlanService? plan = null,
         IMetadataSuggestionService? suggestion = null,
-        ScanProgress? progress = null)
+        ScanProgress? progress = null,
+        IFileScanner? scanner = null)
     {
         metadata ??= new CountingMetadataService();
         rename ??= new RecordingRenameService();
         plan ??= new RecordingPlanService();
         var model = new IndexModel(
-            new EmptyScanner(),
+            scanner ?? new EmptyScanner(),
             new NoOpParser(),
             metadata,
             rename,

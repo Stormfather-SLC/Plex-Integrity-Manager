@@ -340,10 +340,12 @@
         @(Model.LiveCommit.Enabled ? "✅" : "⛔") @Model.LiveCommit.Message
     </div>
 
-    <!-- Real-time status text -->
+    <!-- Real-time status text. data-busy-with is set when the page is opened
+         while PIM is already working; the page then starts out locked. -->
     <div id="workflowStatus"
+         data-busy-with="@Model.BusyWith"
          style="margin-top:10px; font-style:italic;">
-        Ready
+        @(Model.BusyWith == null ? "Ready" : $"PIM is busy with {Model.BusyWith}...")
     </div>
 
 </div>
@@ -977,8 +979,37 @@
     if (scanBtn) {
         scanBtn.addEventListener("click", async () => {
 
+            // One action at a time: everything except Cancel is disabled
+            // until the scan ends and the page reloads.
+            window.pimBusy?.lock();
+            workflowStatus.innerText = "Scanning movie files...";
+
+            // Launch scan in the background.
+            let result = null;
+
+            try {
+                const response = await fetch("?handler=Rescan", {
+                    method: "POST",
+                    headers: {
+                        "RequestVerificationToken": tokenInput.value
+                    }
+                });
+
+                result = response.ok ? await response.json() : null;
+            } catch {
+                result = null;
+            }
+
+            // Not started (no source folder, or PIM is busy with another
+            // action): nothing changed, so leave the page as it was.
+            if (!result || result.started !== true) {
+                workflowStatus.innerText = result?.message ?? "Scan failed.";
+                window.pimBusy?.unlock();
+                return;
+            }
+
             // -------------------------------------------------
-            // 🧪 Clear stale Dry Run Preview immediately
+            // 🧪 Clear the now-stale Dry Run Preview
             // -------------------------------------------------
             const dryRunPreviewSection =
                 document.getElementById("dryRunPreviewSection");
@@ -987,23 +1018,7 @@
                 dryRunPreviewSection.remove();
             }
 
-            workflowStatus.innerText = "Scanning movie files...";
-
-            // Start polling immediately so the UI updates
-            // while the server is processing.
             pollProgress("Scan complete!");
-
-            // Launch scan in the background.
-            const response = await fetch("?handler=Rescan", {
-                method: "POST",
-                headers: {
-                    "RequestVerificationToken": tokenInput.value
-                }
-            });
-
-            if (!response.ok) {
-                workflowStatus.innerText = "Scan failed.";
-            }
         });
     }
         // =====================================================
@@ -1379,9 +1394,10 @@
                     `Estimated Remaining: ${remainingText}`;
 
                 // ---------------------------------------------
-                // ✅ Completed
+                // ✅ Completed: the action has released PIM's
+                // one-at-a-time gate, so its results are saved.
                 // ---------------------------------------------
-                if (!data.isRunning) {
+                if (!data.busy) {
                     clearInterval(interval);
                     workflowStatus.innerHTML = completionMessage;
                     location.reload();

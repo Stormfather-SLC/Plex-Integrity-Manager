@@ -185,11 +185,122 @@ namespace PIM.Web.Pages
                 currentFile = _progress.CurrentFile,
                 isRunning = _progress.IsRunning,
                 canCancel = _progress.CanCancel,
-                cancelRequested = _progress.CancelRequested
+                cancelRequested = _progress.CancelRequested,
+                busy = _progress.IsBusy,
+                busyWith = _progress.BusyWith
             });
         }
 
+        // PIM does one thing at a time. Every handler that reads and rewrites
+        // the scanned movie list, the plan, or the settings claims this gate
+        // first; a second action is refused, changing nothing, until the first
+        // ends. The page also disables its controls, but that alone cannot
+        // stop a second browser tab or a page reloaded part-way through.
+        private const string ScanAction = "Scan Movies";
+        private const string IdentifyAction = "Identify Movies";
+        private const string DryRunAction = "a dry run";
+        private const string LiveCommitAction = "a live commit";
+        private const string DecisionAction = "a review decision";
+        private const string SettingsAction = "a settings change";
+        private const string PlanRefreshAction = "a plan update";
+
+        /// <summary>
+        /// The action in progress when this page was requested, or null. The
+        /// page uses it to start out locked when it is opened mid-action.
+        /// </summary>
+        public string? BusyWith => _progress.BusyWith;
+
+        private string BusyMessage() =>
+            $"PIM is busy with {_progress.BusyWith ?? "another action"}. " +
+            "Nothing was changed. Wait for it to finish, then try again.";
+
+        private IActionResult RefuseBecauseBusy(string refusedAction)
+        {
+            _logger.LogWarning(
+                "Refused {RefusedAction} because PIM is busy with {BusyWith}.",
+                refusedAction,
+                _progress.BusyWith ?? "another action");
+
+            TempData["Message"] = BusyMessage();
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
+        }
+
+        private IActionResult RunExclusive(
+            string action,
+            Func<IActionResult> work)
+        {
+            if (!_progress.TryBeginAction(action))
+                return RefuseBecauseBusy(action);
+
+            try
+            {
+                return work();
+            }
+            finally
+            {
+                _progress.EndAction();
+            }
+        }
+
+        private async Task<IActionResult> RunExclusiveAsync(
+            string action,
+            Func<Task<IActionResult>> work)
+        {
+            if (!_progress.TryBeginAction(action))
+                return RefuseBecauseBusy(action);
+
+            try
+            {
+                return await work();
+            }
+            finally
+            {
+                _progress.EndAction();
+            }
+        }
+
         public IActionResult OnPostRescan()
+        {
+            if (!_progress.TryBeginAction(ScanAction))
+            {
+                _logger.LogWarning(
+                    "Refused {RefusedAction} because PIM is busy with {BusyWith}.",
+                    ScanAction,
+                    _progress.BusyWith ?? "another action");
+
+                return new JsonResult(new
+                {
+                    started = false,
+                    message = BusyMessage()
+                });
+            }
+
+            // The scan runs in the background and releases the gate itself.
+            var handedToBackgroundScan = false;
+
+            try
+            {
+                var result = StartScan();
+                handedToBackgroundScan = result.Started;
+
+                return new JsonResult(new
+                {
+                    started = result.Started,
+                    message = result.Message
+                });
+            }
+            finally
+            {
+                if (!handedToBackgroundScan)
+                    _progress.EndAction();
+            }
+        }
+
+        private (bool Started, string? Message) StartScan()
         {
             InvalidateDryRunApproval();
 
@@ -199,13 +310,7 @@ namespace PIM.Web.Pages
                 .DestinationRoot;
 
             if (string.IsNullOrWhiteSpace(rootPath))
-            {
-                return new JsonResult(new
-                {
-                    started = false,
-                    message = "A source folder must be configured before scanning."
-                });
-            }
+                return (false, "A source folder must be configured before scanning.");
 
             ResetProgress();
             _progress.IsRunning = true;
@@ -258,13 +363,17 @@ namespace PIM.Web.Pages
                 finally
                 {
                     ResetProgress(isRunning: false);
+                    _progress.EndAction();
                 }
             });
 
-            return new JsonResult(new { started = true });
+            return (true, null);
         }
 
-        public async Task<IActionResult> OnPostEnrichAsync()
+        public Task<IActionResult> OnPostEnrichAsync() =>
+            RunExclusiveAsync(IdentifyAction, IdentifyMoviesAsync);
+
+        private async Task<IActionResult> IdentifyMoviesAsync()
         {
             if (!TryGetCachedMovies(out var movies))
                 return RedirectToPage();
@@ -366,7 +475,10 @@ namespace PIM.Web.Pages
             return new JsonResult(new { requested });
         }
 
-        public async Task<IActionResult> OnPostAcceptSuggestedMatchAsync(Guid movieId)
+        public Task<IActionResult> OnPostAcceptSuggestedMatchAsync(Guid movieId) =>
+            RunExclusiveAsync(DecisionAction, () => AcceptSuggestedMatchAsync(movieId));
+
+        private async Task<IActionResult> AcceptSuggestedMatchAsync(Guid movieId)
         {
             InvalidateDryRunApproval();
 
@@ -432,7 +544,10 @@ namespace PIM.Web.Pages
             });
         }
 
-        public async Task<IActionResult> OnPostSetImdbIdAsync(Guid movieId, string? imdbId)
+        public Task<IActionResult> OnPostSetImdbIdAsync(Guid movieId, string? imdbId) =>
+            RunExclusiveAsync(DecisionAction, () => SetImdbIdAsync(movieId, imdbId));
+
+        private async Task<IActionResult> SetImdbIdAsync(Guid movieId, string? imdbId)
         {
             InvalidateDryRunApproval();
 
@@ -500,12 +615,16 @@ namespace PIM.Web.Pages
 
         public IActionResult OnPostAddPlexDuplicate(Guid movieId)
         {
-            return ApplyPlexDuplicateDecision(movieId, addAnyway: true);
+            return RunExclusive(
+                DecisionAction,
+                () => ApplyPlexDuplicateDecision(movieId, addAnyway: true));
         }
 
         public IActionResult OnPostUndoPlexDuplicate(Guid movieId)
         {
-            return ApplyPlexDuplicateDecision(movieId, addAnyway: false);
+            return RunExclusive(
+                DecisionAction,
+                () => ApplyPlexDuplicateDecision(movieId, addAnyway: false));
         }
 
         private IActionResult ApplyPlexDuplicateDecision(Guid movieId, bool addAnyway)
@@ -567,7 +686,10 @@ namespace PIM.Web.Pages
             });
         }
 
-        public IActionResult OnPostConfirmFileName(Guid movieId)
+        public IActionResult OnPostConfirmFileName(Guid movieId) =>
+            RunExclusive(DecisionAction, () => ConfirmFileName(movieId));
+
+        private IActionResult ConfirmFileName(Guid movieId)
         {
             InvalidateDryRunApproval();
 
@@ -613,7 +735,10 @@ namespace PIM.Web.Pages
             });
         }
 
-        public IActionResult OnPostKeepDuplicateCopy(Guid movieId)
+        public IActionResult OnPostKeepDuplicateCopy(Guid movieId) =>
+            RunExclusive(DecisionAction, () => KeepDuplicateCopy(movieId));
+
+        private IActionResult KeepDuplicateCopy(Guid movieId)
         {
             InvalidateDryRunApproval();
 
@@ -659,7 +784,12 @@ namespace PIM.Web.Pages
             });
         }
 
-        public async Task<IActionResult> OnPostCommitAsync()
+        public Task<IActionResult> OnPostCommitAsync() =>
+            RunExclusiveAsync(
+                DryRun ? DryRunAction : LiveCommitAction,
+                CommitAsync);
+
+        private async Task<IActionResult> CommitAsync()
         {
             if (!TryGetCachedMovies(out var movies))
             {
@@ -829,7 +959,10 @@ namespace PIM.Web.Pages
             });
         }
 
-        public IActionResult OnPostSaveSettings()
+        public IActionResult OnPostSaveSettings() =>
+            RunExclusive(SettingsAction, SaveSettings);
+
+        private IActionResult SaveSettings()
         {
             string? temporaryPath = null;
 
@@ -972,17 +1105,28 @@ namespace PIM.Web.Pages
                  movie.DestinationProfileRevision != ActiveDestinationProfile.Revision ||
                  movie.PlannedLibraryGoal != LibraryGoal));
 
+            // Showing the page must not re-plan the list while another action
+            // is working on it. That action's own result is shown when it ends;
+            // until then a stale plan cannot match a dry-run approval.
             if (planInputsChanged &&
-                !string.IsNullOrWhiteSpace(ActiveDestinationProfile.DestinationRoot))
+                !string.IsNullOrWhiteSpace(ActiveDestinationProfile.DestinationRoot) &&
+                _progress.TryBeginAction(PlanRefreshAction))
             {
-                _moviePlan.Rebuild(
-                    cachedMovies,
-                    ActiveDestinationProfile,
-                    ScanPath,
-                    LibraryGoal);
+                try
+                {
+                    _moviePlan.Rebuild(
+                        cachedMovies,
+                        ActiveDestinationProfile,
+                        ScanPath,
+                        LibraryGoal);
 
-                SetCachedMovies(cachedMovies);
-                InvalidateDryRunApproval();
+                    SetCachedMovies(cachedMovies);
+                    InvalidateDryRunApproval();
+                }
+                finally
+                {
+                    _progress.EndAction();
+                }
             }
 
             var sortedMovies = cachedMovies

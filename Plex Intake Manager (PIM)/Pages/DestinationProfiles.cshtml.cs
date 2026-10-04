@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.Mvc.Rendering;
 using PIM.Core.Interfaces;
@@ -12,17 +13,39 @@ public class DestinationProfilesModel : PageModel
     private readonly IDestinationPathBuilder _pathBuilder;
     private readonly IConfiguration _configuration;
     private readonly IWorkflowStateStore _workflowState;
+    private readonly ScanProgress _progress;
 
     public DestinationProfilesModel(
         IDestinationProfileStore profileStore,
         IDestinationPathBuilder pathBuilder,
         IConfiguration configuration,
-        IWorkflowStateStore workflowState)
+        IWorkflowStateStore workflowState,
+        ScanProgress progress)
     {
         _profileStore = profileStore;
         _pathBuilder = pathBuilder;
         _configuration = configuration;
         _workflowState = workflowState;
+        _progress = progress;
+    }
+
+    /// <summary>
+    /// Every POST on this page changes a destination profile. Profiles decide
+    /// where files go, so none may change while a scan, identify, dry run, or
+    /// live commit is working from one.
+    /// </summary>
+    public override void OnPageHandlerExecuting(PageHandlerExecutingContext context)
+    {
+        if (!HttpMethods.IsPost(context.HttpContext.Request.Method) ||
+            !_progress.IsBusy)
+        {
+            return;
+        }
+
+        TempData["ProfileMessage"] =
+            $"PIM is busy with {_progress.BusyWith ?? "another action"}. " +
+            "Nothing was changed. Wait for it to finish, then try again.";
+        context.Result = RedirectToPage();
     }
 
     public IReadOnlyList<DestinationProfile> Profiles { get; private set; }

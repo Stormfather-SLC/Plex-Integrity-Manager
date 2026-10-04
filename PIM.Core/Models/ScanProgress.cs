@@ -28,6 +28,46 @@ namespace PIM.Core.Models
 
         public bool IsRunning { get; set; }
 
+        private int _busy;
+        private string? _busyWith;
+
+        /// <summary>
+        /// True while a scan, identify, dry run, live commit, review decision,
+        /// or settings change is in progress. PIM runs one of these at a time
+        /// because they all read and rewrite the same scanned movie list.
+        /// </summary>
+        public bool IsBusy => Volatile.Read(ref _busy) == 1;
+
+        /// <summary>
+        /// The action that currently holds PIM's one-at-a-time gate, in words
+        /// suitable for the page, or null when PIM is idle.
+        /// </summary>
+        public string? BusyWith => IsBusy ? Volatile.Read(ref _busyWith) : null;
+
+        /// <summary>
+        /// Claims the one-at-a-time gate. Returns false, changing nothing,
+        /// when another action already holds it. A caller that receives true
+        /// must call <see cref="EndAction"/> when its work ends.
+        /// </summary>
+        public bool TryBeginAction(string action)
+        {
+            if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+                return false;
+
+            Volatile.Write(ref _busyWith, action);
+            return true;
+        }
+
+        /// <summary>
+        /// Releases the gate. Only the caller whose
+        /// <see cref="TryBeginAction"/> returned true may call this.
+        /// </summary>
+        public void EndAction()
+        {
+            Volatile.Write(ref _busyWith, null);
+            Volatile.Write(ref _busy, 0);
+        }
+
         private readonly object _cancellationLock = new();
         private CancellationTokenSource? _cancellation;
 
