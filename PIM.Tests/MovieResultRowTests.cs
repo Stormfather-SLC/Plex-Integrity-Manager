@@ -320,6 +320,37 @@ public sealed class MovieResultRowTests
             ordered);
     }
 
+    [Theory]
+    [InlineData(MetadataLookupFailureType.NetworkFailure)]
+    [InlineData(MetadataLookupFailureType.HttpFailure)]
+    [InlineData(MetadataLookupFailureType.Timeout)]
+    [InlineData(MetadataLookupFailureType.RequestLimitReached)]
+    [InlineData(MetadataLookupFailureType.InvalidApiKey)]
+    public void LookupThatGotNoAnswer_SaysHowToTryAgain(MetadataLookupFailureType failure)
+    {
+        var movie = Unidentified("Some Film", 2004);
+        movie.SetMetadataReview("OMDb lookup failed: no answer", failure);
+
+        var row = Row(movie);
+
+        Assert.Equal(MovieResultState.Decide, row.State);
+        Assert.Equal(
+            "OMDb lookup failed: no answer; run Identify Movies to try again",
+            row.Summary);
+    }
+
+    [Theory]
+    [InlineData(MetadataLookupFailureType.MovieNotFound)]
+    [InlineData(MetadataLookupFailureType.LowConfidence)]
+    [InlineData(MetadataLookupFailureType.MissingRequiredFields)]
+    public void LookupThatWasAnswered_DoesNotSuggestTryingAgain(MetadataLookupFailureType failure)
+    {
+        var movie = Unidentified("Some Film", 2004);
+        movie.SetMetadataReview("IMDb ID could not be determined", failure);
+
+        Assert.Equal("IMDb ID could not be determined", Row(movie).Summary);
+    }
+
     private static MovieResultRow Row(Movie movie) =>
         MovieResultRow.Create(movie, SourceRoot, DestinationRoot);
 

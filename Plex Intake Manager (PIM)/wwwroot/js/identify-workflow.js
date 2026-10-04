@@ -122,10 +122,15 @@
                     }
 
                     const busyWith = progress.busyWith || busyWithAtLoad;
-                    workflowStatus.textContent = Number(progress.total) > 0
-                        ? `PIM is busy with ${busyWith}: ` +
-                            `${Number(progress.processed) || 0} of ${Number(progress.total)}...`
-                        : `PIM is busy with ${busyWith}...`;
+                    const counts = Number(progress.total) > 0
+                        ? `${(Number(progress.processed) || 0).toLocaleString()} of ` +
+                            `${Number(progress.total).toLocaleString()}`
+                        : "";
+
+                    workflowStatus.textContent =
+                        `PIM is busy with ${busyWith}` +
+                        (progress.step ? `. ${progress.step}` : "") +
+                        (counts ? `: ${counts}...` : "...");
                 } catch {
                     // Try again on the next tick.
                 }
@@ -192,6 +197,24 @@
                         "<strong>Stopping after the current movie...</strong><br>" +
                         `Looked up ${Number(data.processed) || 0} of ${Number(data.total) || 0}. ` +
                         "Finished lookups will be kept.<br>" +
+                        `Elapsed: ${formatTime(elapsedSeconds)}`;
+                    return;
+                }
+
+                // The server names the step the numbers belong to.
+                if (data.step && data.total > 0) {
+                    workflowStatus.innerHTML =
+                        `<strong>${escapeHtml(data.step)}</strong><br>` +
+                        `${(Number(data.processed) || 0).toLocaleString()} of ` +
+                        `${(Number(data.total) || 0).toLocaleString()}<br>` +
+                        `Current: ${escapeHtml(currentFile)}<br>` +
+                        `Elapsed: ${formatTime(elapsedSeconds)}`;
+                    return;
+                }
+
+                if (data.step) {
+                    workflowStatus.innerHTML =
+                        `<strong>${escapeHtml(data.step)}</strong><br>` +
                         `Elapsed: ${formatTime(elapsedSeconds)}`;
                     return;
                 }

@@ -186,6 +186,7 @@ namespace PIM.Web.Pages
                 isRunning = _progress.IsRunning,
                 canCancel = _progress.CanCancel,
                 cancelRequested = _progress.CancelRequested,
+                step = _progress.Step,
                 busy = _progress.IsBusy,
                 busyWith = _progress.BusyWith
             });
@@ -401,12 +402,16 @@ namespace PIM.Web.Pages
 
             try
             {
-                // Reuse completed metadata, but refresh stale cached records when the
-                // active profile needs a field that was not captured previously.
-                var moviesToEnrich = GetMoviesRequiringMetadata(movies, profile);
+                // Reuse completed metadata: only movies that are not settled yet
+                // are looked up.
+                var moviesToEnrich = GetMoviesToIdentify(movies);
+                var stepCount = moviesToEnrich.Count > 0 ? 2 : 1;
 
                 if (moviesToEnrich.Count > 0)
+                {
+                    BeginStep(1, stepCount, $"Looking up {CountOf(moviesToEnrich.Count, "movie")}");
                     lookup = await EnrichMoviesAsync(moviesToEnrich, cancellation);
+                }
 
                 // Cancel applies to the lookups only. Completed lookups are always
                 // planned and saved below so stopping never loses finished work.
@@ -420,8 +425,10 @@ namespace PIM.Web.Pages
                         lookup.Total);
                 }
 
-                _progress.CurrentFile = "Checking duplicates and destination conflicts...";
-
+                BeginStep(
+                    stepCount,
+                    stepCount,
+                    "Checking duplicates, the destination folder and Plex");
                 _progress.CurrentFile = "Checking Plex library conflicts...";
                 _moviePlan.Rebuild(
                     movies,
@@ -815,17 +822,27 @@ namespace PIM.Web.Pages
                 return RedirectToPage();
             }
 
-            // A dry run may fill only metadata that is still missing. If Identify
-            // Movies just completed, this list is empty and no OMDb calls are made.
+            // A dry run looks up only movies no lookup has been attempted for. If
+            // Identify Movies has run, this list is empty and no OMDb calls are
+            // made: a lookup that failed or is waiting on the owner is not
+            // repeated here, because a dry run reports the plan as it stands.
             // Live commit never refreshes metadata because it must use the exact plan
             // approved by the preceding dry run.
+            var moviesToEnrich = DryRun
+                ? GetMoviesNeverLookedUp(movies)
+                : new List<Movie>();
+            var stepCount = moviesToEnrich.Count > 0 ? 3 : 2;
+            var step = 0;
+
             if (DryRun)
             {
-                var moviesToEnrich = GetMoviesRequiringMetadata(movies, profile);
-
                 if (moviesToEnrich.Count > 0)
                 {
                     LookupOutcome lookup;
+                    BeginStep(
+                        ++step,
+                        stepCount,
+                        $"Looking up {CountOf(moviesToEnrich.Count, "movie")} not looked up yet");
                     _progress.IsRunning = true;
                     var cancellation = _progress.BeginCancellableOperation();
 
@@ -867,6 +884,12 @@ namespace PIM.Web.Pages
 
             // Rebuild the exact current plan immediately before either a dry run
             // or a live commit. This catches profile edits and destination changes.
+            BeginStep(
+                ++step,
+                stepCount,
+                DryRun
+                    ? "Checking duplicates, the destination folder and Plex"
+                    : "Re-checking duplicates, the destination folder and Plex");
             _moviePlan.Rebuild(
                 movies,
                 profile,
@@ -903,6 +926,13 @@ namespace PIM.Web.Pages
                     showOnlyRecommended = ShowOnlyRecommended
                 });
             }
+
+            BeginStep(
+                ++step,
+                stepCount,
+                DryRun
+                    ? $"Simulating {CountOf(approvedMovies.Count, "approved move")}"
+                    : $"Moving {CountOf(approvedMovies.Count, "approved file")}");
 
             // Only approved movies can be acted on; the rest are passed purely
             // so the operation journal records what was not done and why.
@@ -1168,26 +1198,59 @@ namespace PIM.Web.Pages
                 _config["PIM:ScanPath"] ?? string.Empty);
         }
 
-        private static List<Movie> GetMoviesRequiringMetadata(
-            IEnumerable<Movie> movies,
-            DestinationProfile profile)
+        /// <summary>
+        /// Movies that Identify Movies asks OMDb about: those never looked up,
+        /// and those whose earlier lookup failed or is still waiting on the
+        /// owner. Pressing the button is the explicit request to try again.
+        ///
+        /// An identified movie is not asked about again because its MPA rating
+        /// or genre is blank, even when the destination profile sorts by one.
+        /// OMDb's full record, rating and genre included, is captured whenever
+        /// a movie is identified, so a blank value means OMDb has none and
+        /// asking again cannot fill it in.
+        /// </summary>
+        private static List<Movie> GetMoviesToIdentify(IEnumerable<Movie> movies)
         {
-            var profileUsesRating = profile.OrganizationLevels.Any(level =>
-                level.Type == OrganizationLevelType.MpaRating);
-            var profileUsesGenre = profile.OrganizationLevels.Any(level =>
-                level.Type == OrganizationLevelType.PrimaryGenre);
-
             return movies
                 .Where(movie =>
                     !movie.MetadataFetched ||
                     movie.HasMetadataReviewReason ||
                     string.IsNullOrWhiteSpace(movie.Title) ||
                     !movie.Year.HasValue ||
-                    string.IsNullOrWhiteSpace(movie.ImdbId) ||
-                    (profileUsesRating && string.IsNullOrWhiteSpace(movie.MpaRating)) ||
-                    (profileUsesGenre && string.IsNullOrWhiteSpace(movie.PrimaryGenre)))
+                    string.IsNullOrWhiteSpace(movie.ImdbId))
                 .ToList();
         }
+
+        /// <summary>
+        /// Movies a dry run looks up itself: only those no lookup has been
+        /// attempted for (the page's "Not identified" movies). Repeating a
+        /// lookup that already failed or produced a suggestion would return
+        /// the same result, and a temporary OMDb problem during the repeat
+        /// could push a settled movie back into review.
+        /// </summary>
+        private static List<Movie> GetMoviesNeverLookedUp(IEnumerable<Movie> movies)
+        {
+            return movies
+                .Where(MovieResultRow.IsNotLookedUp)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Names the part of the running action that the progress numbers
+        /// belong to. A single-part action shows the description alone.
+        /// </summary>
+        private void BeginStep(int number, int count, string description)
+        {
+            _progress.Total = 0;
+            _progress.Processed = 0;
+            _progress.CurrentFile = string.Empty;
+            _progress.Step = count > 1
+                ? $"Step {number} of {count}: {description}"
+                : description;
+        }
+
+        private static string CountOf(int count, string noun) =>
+            $"{count:N0} {noun}{(count == 1 ? string.Empty : "s")}";
 
         /// <summary>Result of a metadata lookup pass.</summary>
         private readonly record struct LookupOutcome(int Completed, int Total, bool Cancelled);

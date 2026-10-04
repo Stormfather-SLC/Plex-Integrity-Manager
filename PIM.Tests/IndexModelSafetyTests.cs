@@ -1365,12 +1365,15 @@ public sealed partial class IndexModelSafetyTests
 
         public List<(int Approved, int NotApproved)> Calls { get; } = new();
 
+        public Action? OnExecute { get; set; }
+
         public void ExecuteChanges(
             List<Movie> movies,
             bool dryRun,
             string destinationRoot,
             IReadOnlyCollection<Movie>? notApproved = null)
         {
+            OnExecute?.Invoke();
             DryRunFlags.Add(dryRun);
             Calls.Add((movies.Count, notApproved?.Count ?? 0));
         }
