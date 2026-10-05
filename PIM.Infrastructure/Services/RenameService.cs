@@ -912,6 +912,14 @@ namespace PIM.Infrastructure.Services
             if (movie.FileNameConfirmed)
                 decisions.Add("User confirmed the unusually long file name");
 
+            if (movie.IsFileIdentityKept)
+            {
+                decisions.Add(
+                    $"User kept the title and year from the file name for IMDb ID {movie.ImdbId}; " +
+                    $"OMDb lists it as {movie.SuggestedTitle ?? "title unavailable"} " +
+                    $"({movie.SuggestedYear?.ToString() ?? "year unknown"})");
+            }
+
             return decisions.Count == 0
                 ? null
                 : string.Join("; ", decisions) + ".";

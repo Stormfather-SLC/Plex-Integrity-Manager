@@ -39,6 +39,7 @@ public static class PlanFingerprintBuilder
                 movie.KeepRecommended,
                 movie.IsManuallyKept,
                 movie.FileNameConfirmed,
+                movie.FileIdentityKeptForImdbId ?? string.Empty,
                 movie.HasDestinationConflict,
                 movie.DestinationConflictReason ?? string.Empty,
                 movie.ExistingDestinationPath ?? string.Empty,

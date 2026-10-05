@@ -344,6 +344,18 @@ namespace PIM.Infrastructure.Metadata
             var metadataTitle = NormalizeMetadataValue(data.Title);
             var metadataYear = ParseYear(data.Year);
             var returnedImdbId = NormalizeMetadataValue(data.ImdbID) ?? originalImdbId;
+
+            // The owner already decided to keep this file's own title and year
+            // for this IMDb ID, so OMDb's different wording for the same ID is
+            // not raised as a conflict again.
+            if (KeepsFileIdentity(movie, returnedImdbId, originalImdbId))
+            {
+                _logger.LogInformation(
+                    "Supplied IMDb ID {ImdbId} resolved; the file's title and year are kept by the owner's decision.",
+                    originalImdbId);
+                return false;
+            }
+
             var titleConflicts = !string.IsNullOrWhiteSpace(parsedTitle) &&
                                  !string.IsNullOrWhiteSpace(metadataTitle) &&
                                  !NormalizeTitle(parsedTitle).Equals(
@@ -1314,6 +1326,23 @@ namespace PIM.Infrastructure.Metadata
                 discoveryReason);
         }
 
+        /// <summary>
+        /// True when the owner kept the file's title and year for the IMDb ID
+        /// being looked up, and OMDb answered for that same ID.
+        /// </summary>
+        private static bool KeepsFileIdentity(
+            Movie movie,
+            string? returnedImdbId,
+            string? originalImdbId)
+        {
+            return movie.IsFileIdentityKept &&
+                   !string.IsNullOrWhiteSpace(originalImdbId) &&
+                   string.Equals(
+                       returnedImdbId,
+                       originalImdbId,
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
         private void ApplySuccessfulResponse(
             Movie movie,
             OmdbResponse data,
@@ -1341,12 +1370,27 @@ namespace PIM.Infrastructure.Metadata
             if (acceptedFuzzyConfidence.HasValue)
                 movie.MatchConfidence = acceptedFuzzyConfidence.Value;
 
+            // The owner chose to keep this file's own title and year for this
+            // IMDb ID. OMDb's wording stays in the Suggested* fields for
+            // reference, and its rating and genre are still used.
+            var keepFileIdentity =
+                hasImdbId &&
+                KeepsFileIdentity(movie, returnedImdbId ?? originalImdbId, originalImdbId);
+
             movie.IsFuzzyMatch = acceptedFuzzyConfidence.HasValue;
             movie.MetadataMatchedByImdbId = hasImdbId;
             movie.MetadataMatchOrigin = matchOrigin;
-            movie.MetadataDiscoveryReason = discoveryReason;
-            movie.Title = metadataTitle ?? movie.Title;
-            movie.Year = metadataYear ?? movie.Year;
+            movie.MetadataDiscoveryReason = keepFileIdentity
+                ? "Matched by IMDb ID. The title and year from the file were kept by the owner's decision; " +
+                  $"OMDb lists this ID as {metadataTitle ?? "title unavailable"} " +
+                  $"({metadataYear?.ToString() ?? "year unknown"})."
+                : discoveryReason;
+            movie.Title = keepFileIdentity && !string.IsNullOrWhiteSpace(parsedTitle)
+                ? parsedTitle
+                : metadataTitle ?? movie.Title;
+            movie.Year = keepFileIdentity && parsedYear.HasValue
+                ? parsedYear
+                : metadataYear ?? movie.Year;
             movie.ImdbId = returnedImdbId ?? originalImdbId;
             movie.MpaRating = NormalizeMetadataValue(data.Rated);
             movie.Genres = ParseGenres(data.Genre);
