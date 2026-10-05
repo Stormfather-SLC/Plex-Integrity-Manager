@@ -417,6 +417,45 @@ public sealed class MovieResultRowTests
         Assert.False(row.CanAcceptSuggestion);
     }
 
+    [Fact]
+    public void Destination_IsShownOnlyOnceTheIdentityIsConfirmed()
+    {
+        // A path is worked out for planning as soon as a file has a title,
+        // year and IMDb ID, with a blank rating filed under "Unrated". It is
+        // not shown as the destination until the identity is settled.
+        var provisional = Path.Combine(
+            DestinationRoot,
+            "Unrated",
+            "Wonder Woman (2020) {imdb-tt7126948}",
+            "Wonder Woman (2020) {imdb-tt7126948}.mkv");
+
+        var undecided = Unidentified("Wonder Woman", 2020);
+        undecided.ImdbId = "tt7126948";
+        undecided.TargetPath = provisional;
+        undecided.SuggestedTitle = "Wonder Woman 1984";
+        undecided.SuggestedYear = 2020;
+        undecided.SuggestedImdbId = "tt7126948";
+        undecided.SetMetadataReview(
+            "The provided IMDb ID does not match the movie title provided.",
+            MetadataLookupFailureType.ImdbIdentityConflict);
+
+        var notLookedUp = Unidentified("Wonder Woman", 2020);
+        notLookedUp.ImdbId = "tt7126948";
+        notLookedUp.TargetPath = provisional;
+
+        var identified = Identified();
+
+        var identifiedWithoutTarget = Identified();
+        identifiedWithoutTarget.TargetPath = null;
+
+        Assert.False(Row(undecided).HasConfirmedIdentity);
+        Assert.Equal("No destination until the identity is confirmed", Row(undecided).DestinationText);
+        Assert.Equal("No destination until the identity is confirmed", Row(notLookedUp).DestinationText);
+        Assert.True(Row(identified).HasConfirmedIdentity);
+        Assert.Equal(identified.TargetPath, Row(identified).DestinationText);
+        Assert.Equal("No destination yet", Row(identifiedWithoutTarget).DestinationText);
+    }
+
     private static MovieResultRow Row(Movie movie) =>
         MovieResultRow.Create(movie, SourceRoot, DestinationRoot);
 

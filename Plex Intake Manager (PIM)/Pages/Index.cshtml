@@ -907,7 +907,7 @@
                                             <div class="text-break"><span class="text-muted">From:</span> @movie.OriginalFilePath</div>
                                             <div class="text-break">
                                                 <span class="text-muted">To:</span>
-                                                @(string.IsNullOrWhiteSpace(movie.TargetPath) ? "No destination until the identity is confirmed" : movie.TargetPath)
+                                                @row.DestinationText
                                             </div>
                                             @if (row.CanEnterImdbId)
                                             {

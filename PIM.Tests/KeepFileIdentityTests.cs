@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using PIM.Core.Interfaces;
 using PIM.Core.Models;
 using PIM.Infrastructure.Metadata;
+using PIM.Infrastructure.Parsing;
 using PIM.Infrastructure.Services;
 using Xunit;
 
@@ -319,6 +320,43 @@ public sealed class KeepFileIdentityTests
         Assert.Null(movie.FileIdentityKeptForImdbId);
         Assert.True(movie.NeedsReview);
         Assert.Equal(MetadataLookupFailureType.ImdbIdentityConflict, movie.MetadataLookupFailureType);
+    }
+
+    [Fact]
+    public async Task PlexStyleNameWithANumberInItsTitle_IsIdentifiedWithoutAnyDecision()
+    {
+        // Read literally, "Wonder Woman 1984" agrees with OMDb, so there is
+        // no title difference to raise and the rating is recorded at once.
+        var wonderWoman1984 = """
+            {
+              "Title": "Wonder Woman 1984",
+              "Year": "2020",
+              "Rated": "PG-13",
+              "Genre": "Action, Adventure, Fantasy",
+              "imdbID": "tt7126948",
+              "Response": "True"
+            }
+            """;
+        var handler = new QueuedHandler(wonderWoman1984);
+        var (metadata, _) = CreateServices(handler, new CountingPlanService());
+        var movie = new Movie
+        {
+            FileName = "Wonder Woman 1984 (2020) {imdb-tt7126948}.mkv",
+            OriginalFilePath = Path.Combine(
+                Path.GetTempPath(),
+                "PIM-Keep-File-Identity",
+                "Wonder Woman 1984 (2020) {imdb-tt7126948}.mkv")
+        };
+        new FileNameParser().Parse(movie);
+
+        await metadata.EnrichAsync(movie);
+
+        Assert.True(movie.MetadataFetched);
+        Assert.False(movie.NeedsReview);
+        Assert.False(movie.CanKeepFileIdentity);
+        Assert.Equal("Wonder Woman 1984", movie.Title);
+        Assert.Equal(2020, movie.Year);
+        Assert.Equal("PG-13", movie.MpaRating);
     }
 
     [Fact]

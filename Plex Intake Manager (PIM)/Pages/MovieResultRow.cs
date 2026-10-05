@@ -83,6 +83,26 @@ public sealed class MovieResultRow
     public bool IsIdentityUnconfirmed => Movie.HasMetadataReviewReason;
 
     /// <summary>
+    /// The movie was looked up and nothing about who it is remains open.
+    /// </summary>
+    public bool HasConfirmedIdentity =>
+        Movie.MetadataFetched && !Movie.HasMetadataReviewReason;
+
+    /// <summary>
+    /// Where the file would go, shown in Details. Until the identity is
+    /// confirmed there is no trustworthy answer: the rating and genre that
+    /// pick its folders have not been recorded, and its name may still
+    /// change. A path worked out before then is planning scratch work, not a
+    /// destination, so it is not shown.
+    /// </summary>
+    public string DestinationText =>
+        !HasConfirmedIdentity
+            ? "No destination until the identity is confirmed"
+            : string.IsNullOrWhiteSpace(Movie.TargetPath)
+                ? "No destination yet"
+                : Movie.TargetPath;
+
+    /// <summary>
     /// The suggested match scored below the automatic threshold, so accepting
     /// it asks for confirmation.
     /// </summary>
