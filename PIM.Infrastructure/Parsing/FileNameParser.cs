@@ -18,6 +18,14 @@ namespace PIM.Infrastructure.Parsing
             @"\b(19|20)\d{2}\b",
             RegexOptions.Compiled);
 
+        private static readonly Regex BracedImdbTagRegex = new(
+            @"\{\s*imdb[\s._-]*tt\d{7,9}\s*\}",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly Regex ParenthesizedYearRegex = new(
+            @"\(\s*((?:19|20)\d{2})\s*\)",
+            RegexOptions.Compiled);
+
         public void Parse(Movie movie)
         {
             if (string.IsNullOrWhiteSpace(movie.FileName))
@@ -118,6 +126,24 @@ namespace PIM.Infrastructure.Parsing
             }
 
             // =========================================================
+            // Plex-style names are read literally
+            //
+            // In "Title (Year) {imdb-tt…}" the title is exactly the text
+            // before "(Year)", so a number in it is part of the title, not a
+            // release year: "Wonder Woman 1984", "Blade Runner 2049",
+            // "2000 Mules", "1917". An edition marker inside that text still
+            // goes through the general parsing below, which removes it.
+            // =========================================================
+            if (TryReadPlexStyleName(name, out var plexTitle, out var plexYear, out var plexTitleLength) &&
+                !nonOverlappingVersions.Any(version => version.Index < plexTitleLength))
+            {
+                movie.CandidateYears.Add(plexYear);
+                movie.Year = plexYear;
+                movie.Title = plexTitle;
+                return;
+            }
+
+            // =========================================================
             // Detect release year
             //
             // Prefer the filename. When it does not include a year, use the
@@ -187,6 +213,44 @@ namespace PIM.Infrastructure.Parsing
             }
 
             movie.Title = cleaned;
+        }
+
+        /// <summary>
+        /// Recognises a file name of the form "Title (Year) … {imdb-tt…}" and
+        /// returns the title as written: everything before the last "(Year)"
+        /// that precedes the IMDb tag. Any other shape returns false and is
+        /// handled by the general parser.
+        /// </summary>
+        private static bool TryReadPlexStyleName(
+            string name,
+            out string title,
+            out int year,
+            out int titleLength)
+        {
+            title = string.Empty;
+            year = 0;
+            titleLength = 0;
+
+            var imdbTag = BracedImdbTagRegex.Match(name);
+
+            if (!imdbTag.Success)
+                return false;
+
+            var years = ParenthesizedYearRegex.Matches(name[..imdbTag.Index]);
+
+            if (years.Count == 0)
+                return false;
+
+            var yearMatch = years[^1];
+            var candidate = Regex.Replace(name[..yearMatch.Index], @"\s+", " ").Trim();
+
+            if (candidate.Length == 0)
+                return false;
+
+            title = candidate;
+            year = int.Parse(yearMatch.Groups[1].Value);
+            titleLength = yearMatch.Index;
+            return true;
         }
 
         private static string? GetImmediateParentFolderName(string? directoryPath)
