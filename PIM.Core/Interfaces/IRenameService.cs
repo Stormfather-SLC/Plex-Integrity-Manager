@@ -26,11 +26,17 @@ namespace PIM.Core.Interfaces
         /// <paramref name="notApproved"/> lists the scanned movies that are not
         /// part of this run; they are only recorded in the operation journal as
         /// skipped, with the reason, and are never touched or modified.
+        ///
+        /// <paramref name="cancellationToken"/> lets the owner stop the run.
+        /// It is honoured only between files, so a file is either moved
+        /// completely or not started. Files not reached are recorded in the
+        /// journal and left exactly where they are.
         /// </summary>
-        void ExecuteChanges(
+        RenameRunOutcome ExecuteChanges(
             List<Movie> movies,
             bool dryRun,
             string destinationRoot,
-            IReadOnlyCollection<Movie>? notApproved = null);
+            IReadOnlyCollection<Movie>? notApproved = null,
+            CancellationToken cancellationToken = default);
     }
 }

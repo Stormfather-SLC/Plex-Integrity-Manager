@@ -970,11 +970,11 @@ namespace PIM.Web.Pages
                         stepCount,
                         $"Looking up {CountOf(moviesToEnrich.Count, "movie")} not looked up yet");
                     _progress.IsRunning = true;
-                    var cancellation = _progress.BeginCancellableOperation();
+                    var lookupCancellation = _progress.BeginCancellableOperation();
 
                     try
                     {
-                        lookup = await EnrichMoviesAsync(moviesToEnrich, cancellation);
+                        lookup = await EnrichMoviesAsync(moviesToEnrich, lookupCancellation);
                     }
                     finally
                     {
@@ -1008,65 +1008,102 @@ namespace PIM.Web.Pages
                 }
             }
 
-            // Rebuild the exact current plan immediately before either a dry run
-            // or a live commit. This catches profile edits and destination changes.
-            BeginStep(
-                ++step,
-                stepCount,
-                DryRun
-                    ? "Checking duplicates, the destination folder and Plex"
-                    : "Re-checking duplicates, the destination folder and Plex");
-            _moviePlan.Rebuild(
-                movies,
-                profile,
-                sourceRoot,
-                libraryGoal);
-            SetCachedMovies(movies);
+            // The owner can stop a live commit. Cancel is available from the
+            // re-check onward and is honoured only at safe points: before the
+            // first move, and between files, never during one. A dry run's
+            // simulation moves nothing and is brief, so it has no stop here.
+            var cancellation = DryRun
+                ? CancellationToken.None
+                : _progress.BeginCancellableOperation();
+            List<Movie> approvedMovies;
+            string currentPlanFingerprint;
+            RenameRunOutcome outcome;
 
-            var approvedMovies = movies
-                .Where(movie =>
-                    movie.ApprovedForCommit &&
-                    !movie.NeedsReview &&
-                    !movie.HasError)
-                .ToList();
-
-            var currentPlanFingerprint = PlanFingerprintBuilder.Build(
-                movies,
-                profile,
-                libraryGoal);
-
-            if (!DryRun && !HasMatchingDryRunApproval(
-                    profile,
-                    currentPlanFingerprint,
-                    libraryGoal))
+            try
             {
-                TempData["Message"] =
-                    "No files were moved. The current destination plan does not have a matching dry-run approval. " +
-                    "Run a new dry run, review the results, and then return to live commit.";
+                // Rebuild the exact current plan immediately before either a dry run
+                // or a live commit. This catches profile edits and destination changes.
+                BeginStep(
+                    ++step,
+                    stepCount,
+                    DryRun
+                        ? "Checking duplicates, the destination folder and Plex"
+                        : "Re-checking duplicates, the destination folder and Plex");
+                _moviePlan.Rebuild(
+                    movies,
+                    profile,
+                    sourceRoot,
+                    libraryGoal);
+                SetCachedMovies(movies);
 
-                _logger.LogWarning(
-                    "Live commit rejected because the current plan did not match the approved dry run.");
+                approvedMovies = movies
+                    .Where(movie =>
+                        movie.ApprovedForCommit &&
+                        !movie.NeedsReview &&
+                        !movie.HasError)
+                    .ToList();
 
-                return RedirectToPage(new
+                currentPlanFingerprint = PlanFingerprintBuilder.Build(
+                    movies,
+                    profile,
+                    libraryGoal);
+
+                if (!DryRun && !HasMatchingDryRunApproval(
+                        profile,
+                        currentPlanFingerprint,
+                        libraryGoal))
                 {
-                    showOnlyRecommended = ShowOnlyRecommended
-                });
+                    TempData["Message"] =
+                        "No files were moved. The current destination plan does not have a matching dry-run approval. " +
+                        "Run a new dry run, review the results, and then return to live commit.";
+
+                    _logger.LogWarning(
+                        "Live commit rejected because the current plan did not match the approved dry run.");
+
+                    return RedirectToPage(new
+                    {
+                        showOnlyRecommended = ShowOnlyRecommended
+                    });
+                }
+
+                // Stopped during the re-check: nothing has been moved, and the
+                // plan is unchanged, so the dry-run approval stays as it is.
+                if (cancellation.IsCancellationRequested)
+                {
+                    _logger.LogInformation(
+                        "Live commit stopped by the user before any file was moved.");
+
+                    TempData["Message"] =
+                        "The live commit was stopped before any file was moved. Nothing was changed. " +
+                        "The dry-run approval is still valid until it expires.";
+
+                    return RedirectToPage(new
+                    {
+                        showOnlyRecommended = ShowOnlyRecommended
+                    });
+                }
+
+                BeginStep(
+                    ++step,
+                    stepCount,
+                    DryRun
+                        ? $"Simulating {CountOf(approvedMovies.Count, "approved move")}"
+                        : $"Moving {CountOf(approvedMovies.Count, "approved file")}");
+
+                // Only approved movies can be acted on; the rest are passed purely
+                // so the operation journal records what was not done and why.
+                outcome = _rename.ExecuteChanges(
+                    approvedMovies,
+                    DryRun,
+                    profile.DestinationRoot,
+                    movies.Except(approvedMovies).ToList(),
+                    cancellation);
             }
-
-            BeginStep(
-                ++step,
-                stepCount,
-                DryRun
-                    ? $"Simulating {CountOf(approvedMovies.Count, "approved move")}"
-                    : $"Moving {CountOf(approvedMovies.Count, "approved file")}");
-
-            // Only approved movies can be acted on; the rest are passed purely
-            // so the operation journal records what was not done and why.
-            _rename.ExecuteChanges(
-                approvedMovies,
-                DryRun,
-                profile.DestinationRoot,
-                movies.Except(approvedMovies).ToList());
+            finally
+            {
+                if (!DryRun)
+                    _progress.EndCancellableOperation();
+            }
 
             SetCachedMovies(movies);
             var summary = BuildCommitSummary(movies, approvedMovies);
@@ -1092,6 +1129,35 @@ namespace PIM.Web.Pages
                     $"{summary.DuplicateSkipCount} duplicates would be skipped, " +
                     $"{summary.ReviewCount} need review, " +
                     $"{summary.ErrorCount} errors found.";
+            }
+            else if (outcome.StoppedByUser)
+            {
+                // Some files moved and some did not, so the approved plan no
+                // longer describes what is on disk.
+                InvalidateDryRunApproval();
+
+                var notMoved = approvedMovies.Count - outcome.MovedCount - outcome.NotReachedCount;
+
+                _logger.LogInformation(
+                    "Live commit stopped by the user: {Moved} of {Approved} approved file(s) moved, {NotReached} not reached.",
+                    outcome.MovedCount,
+                    approvedMovies.Count,
+                    outcome.NotReachedCount);
+
+                TempData["Message"] =
+                    $"Live commit stopped. {outcome.MovedCount:N0} of {CountOf(approvedMovies.Count, "approved file")} " +
+                    $"{(outcome.MovedCount == 1 ? "was" : "were")} moved and " +
+                    $"{(outcome.MovedCount == 1 ? "stays" : "stay")} moved. " +
+                    $"{outcome.NotReachedCount:N0} {(outcome.NotReachedCount == 1 ? "was" : "were")} not reached and " +
+                    $"{(outcome.NotReachedCount == 1 ? "is" : "are")} still where " +
+                    $"{(outcome.NotReachedCount == 1 ? "it was" : "they were")}." +
+                    (notMoved > 0
+                        ? $" {notMoved:N0} could not be moved; see Movie Results."
+                        : string.Empty) +
+                    " Run Scan Movies to refresh the list before you continue." +
+                    (string.IsNullOrWhiteSpace(_rename.LastJournalLocation)
+                        ? string.Empty
+                        : $" A record of every file operation was saved to {_rename.LastJournalLocation}.");
             }
             else
             {

@@ -325,10 +325,11 @@
         </form>
 
         <!-- Cancel: stops Identify Movies or a dry run's lookups after the
-             current movie; enabled by identify-workflow.js while they run. -->
+             current movie, or a live commit after the current file; enabled
+             by identify-workflow.js while one of them runs. -->
         <button type="button"
                 id="cancelBtn"
-                title="Stop looking up movies after the current one. Finished lookups are kept."
+                title="Stop after the current movie or file. Finished work is kept: lookups already done stay done, and files already moved stay moved."
                 disabled>
             ⛔ Cancel
         </button>

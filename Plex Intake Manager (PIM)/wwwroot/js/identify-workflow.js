@@ -21,10 +21,15 @@
         cancelUrl.hash = "";
         cancelUrl.searchParams.set("handler", "Cancel");
         let cancelPending = false;
+        let busyWith = workflowStatus.dataset.busyWith || "";
 
         const setCancelState = progress => {
             if (!cancelButton) {
                 return;
+            }
+
+            if (progress?.busyWith) {
+                busyWith = progress.busyWith;
             }
 
             cancelButton.disabled =
@@ -39,9 +44,14 @@
 
                 cancelPending = true;
                 cancelButton.disabled = true;
-                workflowStatus.innerHTML =
-                    "<strong>Stopping after the current movie...</strong><br>" +
-                    "Finished lookups will be kept.";
+                // Lets the commit's own progress display show the stop note
+                // at once, before the server's next progress report.
+                document.body.dataset.pimCancelRequested = "true";
+                workflowStatus.innerHTML = busyWith === "a live commit"
+                    ? "<strong>Stopping after the current file...</strong><br>" +
+                        "Files already moved stay moved. The rest are left where they are."
+                    : "<strong>Stopping after the current movie...</strong><br>" +
+                        "Finished lookups will be kept.";
 
                 try {
                     await fetch(cancelUrl.toString(), {
@@ -55,6 +65,7 @@
                     });
                 } catch (error) {
                     cancelPending = false;
+                    delete document.body.dataset.pimCancelRequested;
                     console.error("PIM cancel request failed.", error);
                 }
             });
@@ -65,17 +76,14 @@
         cancelProgressUrl.hash = "";
         cancelProgressUrl.searchParams.set("handler", "Progress");
 
-        // A dry run is an ordinary form post; while it is in flight, keep the
-        // Cancel button in step with the server so its lookups can be stopped.
+        // A dry run or live commit is an ordinary form post; while it is in
+        // flight, keep the Cancel button in step with the server. A dry run's
+        // lookups can be stopped, and a live commit can be stopped between
+        // files.
         const commitForm = document.querySelector('form[action*="handler=Commit"]');
 
         if (commitForm && cancelButton) {
-            commitForm.addEventListener("submit", function (event) {
-                // Only a dry run looks movies up; a live commit is not cancellable.
-                if (event.submitter?.id === "liveCommitButton") {
-                    return;
-                }
-
+            commitForm.addEventListener("submit", function () {
                 window.setInterval(async function () {
                     try {
                         const response = await fetch(cancelProgressUrl.toString(), {
@@ -304,6 +312,7 @@
             } catch (error) {
                 polling = false;
                 cancelPending = false;
+                delete document.body.dataset.pimCancelRequested;
                 setCancelState(null);
                 window.clearInterval(elapsedTimer);
                 window.clearInterval(progressTimer);

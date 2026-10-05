@@ -147,11 +147,23 @@
                 const elapsed = formatTime(elapsedSeconds);
                 const data = latestProgress;
 
+                // The owner pressed Cancel: say what stopping means here. The
+                // server stops only at a safe point, so work can continue for
+                // a moment.
+                const stopNote =
+                    data.cancelRequested ||
+                    document.body.dataset.pimCancelRequested === "true"
+                    ? `<div><strong>${isDryRun
+                        ? "Stopping after the current movie. Finished lookups are kept."
+                        : "Stopping after the current file. Files already moved stay moved; the rest are left where they are."
+                    }</strong></div>`
+                    : "";
+
                 // The server names the step the numbers belong to, so a count
                 // of movie lookups is never read as the number of files moved.
-                const stepHeading = data.step
+                const stepHeading = stopNote + (data.step
                     ? `<div><strong>${escapeHtml(data.step)}</strong></div>`
-                    : "";
+                    : "");
 
                 if (data.isRunning && data.total > 0) {
                     const processed = Math.max(0, Number(data.processed) || 0);

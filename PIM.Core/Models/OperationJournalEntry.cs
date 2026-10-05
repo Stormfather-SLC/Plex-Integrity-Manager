@@ -12,7 +12,12 @@ public enum OperationJournalEvent
     Failed,
     SourceFolderRemoved,
     RunCompleted,
-    RunAborted
+    RunAborted,
+
+    /// <summary>
+    /// The owner stopped the run before every approved file was handled.
+    /// </summary>
+    RunStopped
 }
 
 /// <summary>One line in the operation journal.</summary>
