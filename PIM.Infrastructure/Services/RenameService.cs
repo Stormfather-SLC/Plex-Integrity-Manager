@@ -115,11 +115,17 @@ namespace PIM.Infrastructure.Services
         /// immediately before commit is reused for the full batch rather than
         /// recursively rescanning the destination library once per movie.
         /// </summary>
-        public void ExecuteChanges(
+        /// <summary>
+        /// Status of an approved file that a stopped run never started on.
+        /// </summary>
+        public const string NotReachedStatus = "Not moved - stopped before this file";
+
+        public RenameRunOutcome ExecuteChanges(
             List<Movie> movies,
             bool dryRun,
             string destinationRoot,
-            IReadOnlyCollection<Movie>? notApproved = null)
+            IReadOnlyCollection<Movie>? notApproved = null,
+            CancellationToken cancellationToken = default)
         {
             movies ??= new List<Movie>();
             notApproved ??= Array.Empty<Movie>();
@@ -137,7 +143,7 @@ namespace PIM.Infrastructure.Services
             // A run with nothing approved is still journaled when there are
             // scanned movies, so the record shows what was not done and why.
             if (movies.Count == 0 && notApproved.Count == 0)
-                return;
+                return RenameRunOutcome.Nothing;
 
             if (string.IsNullOrWhiteSpace(destinationRoot))
                 throw new InvalidOperationException("Destination root is required.");
@@ -189,7 +195,7 @@ namespace PIM.Infrastructure.Services
 
                     _progress.Message = "Live commit aborted: the operation journal could not be written.";
                     _progress.IsRunning = false;
-                    return;
+                    return RenameRunOutcome.Nothing;
                 }
 
                 journalRun = NullOperationJournal.Instance.StartRun(
@@ -199,6 +205,7 @@ namespace PIM.Infrastructure.Services
             }
 
             var journalFailed = false;
+            var notReachedCount = 0;
 
             // Informational entries (skips, conflicts) must never change the
             // outcome for a movie; the pre-move entry is the one that gates moves.
@@ -241,6 +248,25 @@ namespace PIM.Infrastructure.Services
                         }
 
                         _progress.Processed++;
+                        continue;
+                    }
+
+                    // The owner asked to stop. This is the only place the
+                    // request is honoured: between files, never during one,
+                    // so no file is left half-moved. Every file not reached
+                    // is recorded and left exactly where it is.
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        notReachedCount++;
+                        movie.Status = NotReachedStatus;
+                        RecordBestEffort(
+                            OperationJournalEntry.ForMovie(
+                                OperationJournalEvent.Skipped,
+                                movie,
+                                dryRun
+                                    ? "Not simulated: the dry run was stopped by the user before this file."
+                                    : "Not moved: the live commit was stopped by the user before this file."),
+                            flushToDisk: false);
                         continue;
                     }
 
@@ -529,22 +555,33 @@ namespace PIM.Infrastructure.Services
             finally
             {
                 _progress.CurrentFile = string.Empty;
-                _progress.Message = dryRun
-                    ? "Dry run complete."
-                    : "Live commit complete.";
+                _progress.Message = notReachedCount > 0
+                    ? $"{operationName} stopped."
+                    : dryRun
+                        ? "Dry run complete."
+                        : "Live commit complete.";
                 _progress.IsRunning = false;
 
                 RecordBestEffort(new OperationJournalEntry(
                     journalFailed
                         ? OperationJournalEvent.RunAborted
-                        : OperationJournalEvent.RunCompleted,
+                        : notReachedCount > 0
+                            ? OperationJournalEvent.RunStopped
+                            : OperationJournalEvent.RunCompleted,
                     Status: operationName,
-                    Detail: $"Committed {movies.Count(m => m.Status == "Committed")} file(s); processed {_progress.Processed} of {_progress.Total}."));
+                    Detail: $"Committed {movies.Count(m => m.Status == "Committed")} file(s); processed {_progress.Processed} of {_progress.Total}." +
+                            (notReachedCount > 0
+                                ? $" Stopped by the user; {notReachedCount} approved file(s) were not reached and were left where they are."
+                                : string.Empty)));
 
                 Console.WriteLine(
-                    $"[PIM] {operationName} finished. " +
+                    $"[PIM] {operationName} {(notReachedCount > 0 ? "stopped by the user" : "finished")}. " +
                     $"Processed {_progress.Processed:N0} of {_progress.Total:N0} file(s).");
             }
+
+            return new RenameRunOutcome(
+                movies.Count(movie => movie.Status == "Committed"),
+                notReachedCount);
         }
 
         private static SourceCleanupResult RemoveEmptyCommittedSourceFolders(

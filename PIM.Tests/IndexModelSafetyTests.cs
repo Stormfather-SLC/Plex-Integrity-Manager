@@ -1177,17 +1177,19 @@ public sealed partial class IndexModelSafetyTests
 
     private static (IRenameService Rename, IMoviePlanService Plan) CreateRealServices(
         IConfiguration configuration,
-        IPlexLibraryConflictService? plex = null)
+        IPlexLibraryConflictService? plex = null,
+        Func<IOperationJournal, IOperationJournal>? wrapJournal = null)
     {
         var progress = new ScanProgress();
         var destination = new DestinationConflictService(progress);
+        IOperationJournal journal = new JsonLinesOperationJournal(configuration);
         var rename = new RenameService(
             destination,
             new DestinationPathBuilder(),
             configuration,
             progress,
             new SourceCleanupStatus(),
-            new JsonLinesOperationJournal(configuration));
+            wrapJournal?.Invoke(journal) ?? journal);
         var conflicts = new MovieConflictDetectionService(
             destination,
             plex ?? new NoPlexConflictService());
@@ -1367,15 +1369,26 @@ public sealed partial class IndexModelSafetyTests
 
         public Action? OnExecute { get; set; }
 
-        public void ExecuteChanges(
+        /// <summary>The token each run was given, to check it can be stopped.</summary>
+        public List<CancellationToken> Tokens { get; } = new();
+
+        /// <summary>What the next run reports; a completed run by default.</summary>
+        public Func<List<Movie>, CancellationToken, RenameRunOutcome>? Outcome { get; set; }
+
+        public RenameRunOutcome ExecuteChanges(
             List<Movie> movies,
             bool dryRun,
             string destinationRoot,
-            IReadOnlyCollection<Movie>? notApproved = null)
+            IReadOnlyCollection<Movie>? notApproved = null,
+            CancellationToken cancellationToken = default)
         {
             OnExecute?.Invoke();
             DryRunFlags.Add(dryRun);
             Calls.Add((movies.Count, notApproved?.Count ?? 0));
+            Tokens.Add(cancellationToken);
+
+            return Outcome?.Invoke(movies, cancellationToken) ??
+                   new RenameRunOutcome(dryRun ? 0 : movies.Count, 0);
         }
     }
 
