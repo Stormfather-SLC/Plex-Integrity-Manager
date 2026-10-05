@@ -25,4 +25,30 @@ public interface IMetadataSuggestionService
         DestinationProfile profile,
         string sourceRoot,
         LibraryGoal libraryGoal);
+
+    /// <summary>
+    /// Records the owner's decision to keep the title and year from the file
+    /// name for a movie whose IMDb ID OMDb found under different wording, then
+    /// looks the ID up again (for rating and genre) and rebuilds the plan. The
+    /// IMDb ID is unchanged. Returns false, changing nothing, when the movie
+    /// is not eligible.
+    /// </summary>
+    Task<bool> KeepFileIdentityAsync(
+        Movie movie,
+        List<Movie> allMovies,
+        DestinationProfile profile,
+        string sourceRoot,
+        LibraryGoal libraryGoal);
+
+    /// <summary>
+    /// Withdraws that decision: the ID is looked up again without it, so the
+    /// difference from OMDb returns to the owner as a decision. Returns false,
+    /// changing nothing, when there is no such decision to undo.
+    /// </summary>
+    Task<bool> UndoKeepFileIdentityAsync(
+        Movie movie,
+        List<Movie> allMovies,
+        DestinationProfile profile,
+        string sourceRoot,
+        LibraryGoal libraryGoal);
 }

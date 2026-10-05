@@ -139,6 +139,8 @@ public sealed partial class IndexModelSafetyTests
         Refused().OnPostUndoPlexDuplicate(first.Id);
         await Refused().OnPostSetImdbIdAsync(first.Id, "tt7654321");
         await Refused().OnPostAcceptSuggestedMatchAsync(first.Id);
+        await Refused().OnPostKeepFileIdentityAsync(first.Id);
+        await Refused().OnPostUndoKeepFileIdentityAsync(first.Id);
 
         Assert.All(
             refused,
@@ -146,6 +148,8 @@ public sealed partial class IndexModelSafetyTests
         Assert.Equal(approval, store.GetDryRunApproval());
         Assert.Equal(0, plan.CallCount);
         Assert.Empty(suggestion.AppliedImdbIds);
+        Assert.Empty(suggestion.KeptFileIdentities);
+        Assert.Empty(suggestion.UndoneFileIdentities);
         Assert.False(first.IsManuallyKept);
         Assert.Equal("tt1234567", first.ImdbId);
         Assert.Equal(RunningAction, progress.BusyWith);

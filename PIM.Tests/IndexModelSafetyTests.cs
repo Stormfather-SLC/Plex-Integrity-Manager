@@ -1448,6 +1448,34 @@ public sealed partial class IndexModelSafetyTests
             movie.ImdbId = imdbId;
             return Task.FromResult(true);
         }
+
+        public List<Guid> KeptFileIdentities { get; } = new();
+
+        public List<Guid> UndoneFileIdentities { get; } = new();
+
+        public Task<bool> KeepFileIdentityAsync(
+            Movie movie,
+            List<Movie> allMovies,
+            DestinationProfile profile,
+            string sourceRoot,
+            LibraryGoal libraryGoal)
+        {
+            KeptFileIdentities.Add(movie.Id);
+            movie.FileIdentityKeptForImdbId = movie.ImdbId;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> UndoKeepFileIdentityAsync(
+            Movie movie,
+            List<Movie> allMovies,
+            DestinationProfile profile,
+            string sourceRoot,
+            LibraryGoal libraryGoal)
+        {
+            UndoneFileIdentities.Add(movie.Id);
+            movie.FileIdentityKeptForImdbId = null;
+            return Task.FromResult(true);
+        }
     }
 
     private sealed class InMemoryTempDataProvider : ITempDataProvider

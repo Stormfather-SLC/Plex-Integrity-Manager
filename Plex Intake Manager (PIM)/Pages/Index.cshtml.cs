@@ -620,6 +620,132 @@ namespace PIM.Web.Pages
             });
         }
 
+        public Task<IActionResult> OnPostKeepFileIdentityAsync(Guid movieId) =>
+            RunExclusiveAsync(DecisionAction, () => KeepFileIdentityAsync(movieId));
+
+        /// <summary>
+        /// The owner keeps the title and year from the file name for a movie
+        /// whose IMDb ID OMDb lists under different wording. The IMDb ID is
+        /// unchanged.
+        /// </summary>
+        private async Task<IActionResult> KeepFileIdentityAsync(Guid movieId)
+        {
+            InvalidateDryRunApproval();
+
+            if (!TryGetCachedMovies(out var movies))
+            {
+                TempData["Message"] = "The scan is no longer available. Scan the source folder again.";
+                return RedirectToPage();
+            }
+
+            var movie = movies.SingleOrDefault(candidate => candidate.Id == movieId);
+
+            if (movie == null || !movie.CanKeepFileIdentity)
+            {
+                TempData["Message"] =
+                    "That movie is no longer waiting for a choice between its file's name and OMDb's. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            var keptName = $"{movie.FileIdentityTitle} ({movie.FileIdentityYear})";
+
+            _logger.LogInformation(
+                "User kept the file's own identity {KeptName} for {FileName}, IMDb {ImdbId}, instead of OMDb's {OmdbTitle} ({OmdbYear}); invalidating prior dry-run approval and rebuilding the plan.",
+                keptName,
+                movie.FileName ?? "<unknown>",
+                movie.ImdbId,
+                movie.SuggestedTitle,
+                movie.SuggestedYear);
+
+            var kept = await _metadataSuggestion.KeepFileIdentityAsync(
+                movie,
+                movies,
+                _profileStore.GetActiveProfile(),
+                _config["PIM:ScanPath"] ?? string.Empty,
+                GetConfiguredLibraryGoal());
+
+            if (!kept)
+            {
+                TempData["Message"] = "The file's name could not be kept. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            SetCachedMovies(movies);
+
+            TempData["Message"] = movie.NeedsReview || movie.HasError
+                ? $"'{movie.FileName}' keeps the name from its file, {keptName}, but it still needs attention: {movie.ReviewReason ?? movie.ErrorMessage ?? movie.Status}."
+                : $"'{movie.FileName}' keeps the name from its file, {keptName}, with IMDb ID {movie.ImdbId}. Run a new dry run before live commit.";
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
+        }
+
+        public Task<IActionResult> OnPostUndoKeepFileIdentityAsync(Guid movieId) =>
+            RunExclusiveAsync(DecisionAction, () => UndoKeepFileIdentityAsync(movieId));
+
+        private async Task<IActionResult> UndoKeepFileIdentityAsync(Guid movieId)
+        {
+            InvalidateDryRunApproval();
+
+            if (!TryGetCachedMovies(out var movies))
+            {
+                TempData["Message"] = "The scan is no longer available. Scan the source folder again.";
+                return RedirectToPage();
+            }
+
+            var movie = movies.SingleOrDefault(candidate => candidate.Id == movieId);
+
+            if (movie == null || !movie.IsFileIdentityKept)
+            {
+                TempData["Message"] =
+                    "That movie has no kept file name to undo. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            _logger.LogInformation(
+                "User undid the decision to keep the file's own identity for {FileName}, IMDb {ImdbId}; invalidating prior dry-run approval and rebuilding the plan.",
+                movie.FileName ?? "<unknown>",
+                movie.ImdbId);
+
+            var undone = await _metadataSuggestion.UndoKeepFileIdentityAsync(
+                movie,
+                movies,
+                _profileStore.GetActiveProfile(),
+                _config["PIM:ScanPath"] ?? string.Empty,
+                GetConfiguredLibraryGoal());
+
+            if (!undone)
+            {
+                TempData["Message"] = "The decision could not be undone. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            SetCachedMovies(movies);
+
+            TempData["Message"] = movie.NeedsReview || movie.HasError
+                ? $"'{movie.FileName}' no longer keeps the name from its file and needs your decision again: {movie.ReviewReason ?? movie.ErrorMessage ?? movie.Status}."
+                : $"'{movie.FileName}' no longer keeps the name from its file. Run a new dry run before live commit.";
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
+        }
+
         public IActionResult OnPostAddPlexDuplicate(Guid movieId)
         {
             return RunExclusive(

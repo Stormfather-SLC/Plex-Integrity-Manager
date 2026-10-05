@@ -351,6 +351,72 @@ public sealed class MovieResultRowTests
         Assert.Equal("IMDb ID could not be determined", Row(movie).Summary);
     }
 
+    [Fact]
+    public void ImdbIdListedDifferentlyByOmdb_OffersBothOmdbsNameAndTheFilesOwn()
+    {
+        var movie = Unidentified("1917", 2019);
+        movie.ImdbId = "tt8579674";
+        movie.SuggestedTitle = "1917";
+        movie.SuggestedYear = 2020;
+        movie.SuggestedImdbId = "tt8579674";
+        movie.MatchConfidence = 90;
+        movie.SetMetadataReview(
+            "The provided IMDb ID does not match the movie year provided.",
+            MetadataLookupFailureType.ImdbIdentityConflict);
+
+        var row = Row(movie);
+
+        Assert.Equal(MovieResultState.Decide, row.State);
+        Assert.True(row.CanAcceptSuggestion);
+        Assert.True(row.CanKeepFileIdentity);
+        Assert.False(row.CanUndoKeepFileIdentity);
+        Assert.Equal("1917 (2019)", row.KeepFileIdentityName);
+        Assert.Equal(
+            "Name this movie \"1917 (2019)\", as its file says, instead of OMDb's \"1917 (2020)\"? " +
+            "The IMDb ID stays tt8579674. Plex matches the movie by that ID, " +
+            "so keep the file's name only if this ID is the right movie.",
+            row.KeepFileIdentityConfirmation);
+    }
+
+    [Fact]
+    public void TitleBasedSuggestion_DoesNotOfferKeepingTheFilesName()
+    {
+        var movie = Unidentified("Back to the Future", 1986);
+        movie.SuggestedTitle = "Back to the Future";
+        movie.SuggestedYear = 1985;
+        movie.SuggestedImdbId = "tt0088763";
+        movie.MatchConfidence = 90;
+        movie.SetMetadataReview(
+            "Possible OMDb match: Back to the Future (1985)",
+            MetadataLookupFailureType.FuzzyCandidateYearConflict);
+
+        var row = Row(movie);
+
+        // Without an IMDb ID on the movie, the file's name alone is not an
+        // identity PIM can keep.
+        Assert.True(row.CanAcceptSuggestion);
+        Assert.False(row.CanKeepFileIdentity);
+        Assert.Null(row.KeepFileIdentityConfirmation);
+    }
+
+    [Fact]
+    public void KeptFileIdentity_IsReady_SaysSo_AndCanBeUndone()
+    {
+        var movie = Identified();
+        movie.SuggestedTitle = "Inception";
+        movie.SuggestedYear = 2011;
+        movie.SuggestedImdbId = movie.ImdbId;
+        movie.FileIdentityKeptForImdbId = movie.ImdbId;
+
+        var row = Row(movie);
+
+        Assert.Equal(MovieResultState.Ready, row.State);
+        Assert.Equal("Ready to move; keeps the name from its file (your decision)", row.Summary);
+        Assert.True(row.CanUndoKeepFileIdentity);
+        Assert.False(row.CanKeepFileIdentity);
+        Assert.False(row.CanAcceptSuggestion);
+    }
+
     private static MovieResultRow Row(Movie movie) =>
         MovieResultRow.Create(movie, SourceRoot, DestinationRoot);
 

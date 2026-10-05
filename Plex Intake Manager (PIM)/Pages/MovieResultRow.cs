@@ -134,6 +134,31 @@ public sealed class MovieResultRow
         Movie.HasMetadataReviewReason &&
         Movie.CanAcceptMetadataSuggestion;
 
+    /// <summary>
+    /// OMDb found the movie's IMDb ID under a different title or year. Beside
+    /// accepting OMDb's wording, the owner may keep the file's own.
+    /// </summary>
+    public bool CanKeepFileIdentity =>
+        Movie.NeedsReview && Movie.CanKeepFileIdentity;
+
+    /// <summary>The name the movie has if the file's identity is kept.</summary>
+    public string KeepFileIdentityName =>
+        $"{Movie.FileIdentityTitle} ({Movie.FileIdentityYear})";
+
+    /// <summary>
+    /// Keeping the file's name sets the movie's identity just as accepting a
+    /// suggestion does, so it is always confirmed explicitly.
+    /// </summary>
+    public string? KeepFileIdentityConfirmation =>
+        CanKeepFileIdentity
+            ? $"Name this movie \"{KeepFileIdentityName}\", as its file says, " +
+              $"instead of OMDb's \"{Movie.SuggestedTitle} ({Movie.SuggestedYear})\"? " +
+              $"The IMDb ID stays {Movie.ImdbId}. Plex matches the movie by that ID, " +
+              "so keep the file's name only if this ID is the right movie."
+            : null;
+
+    public bool CanUndoKeepFileIdentity => Movie.IsFileIdentityKept;
+
     public bool CanKeepThisCopy => Movie.HasDuplicateTieReview;
 
     public bool CanConfirmFileName => Movie.HasSuspiciousFileNameReview;
@@ -295,19 +320,19 @@ public sealed class MovieResultRow
                 return reasons.FirstOrDefault() ?? "Needs review";
 
             case MovieResultState.Ready:
-                if (movie.IsPlexDuplicateAccepted)
-                    return "Will be added alongside the existing Plex copy (your decision)";
+                var ready = movie.IsPlexDuplicateAccepted
+                    ? "Will be added alongside the existing Plex copy (your decision)"
+                    : movie.IsPlexTrackedMigration
+                        ? "Plex tracks this file; it will be reorganized"
+                        : movie.IsAlternateVersion
+                            ? "Additional edition; will be moved"
+                            : movie.KeepRecommended
+                                ? "Best copy of this movie; will be moved"
+                                : "Ready to move";
 
-                if (movie.IsPlexTrackedMigration)
-                    return "Plex tracks this file; it will be reorganized";
-
-                if (movie.IsAlternateVersion)
-                    return "Additional edition; will be moved";
-
-                if (movie.KeepRecommended)
-                    return "Best copy of this movie; will be moved";
-
-                return "Ready to move";
+                return movie.IsFileIdentityKept
+                    ? $"{ready}; keeps the name from its file (your decision)"
+                    : ready;
 
             case MovieResultState.Skipped:
                 return "Another copy is kept; this one stays where it is (not deleted)";

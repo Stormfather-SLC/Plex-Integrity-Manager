@@ -693,6 +693,35 @@
                                                 </button>
                                             </form>
                                         }
+                                        @if (row.CanKeepFileIdentity)
+                                        {
+                                            <form method="post"
+                                                  asp-page-handler="KeepFileIdentity"
+                                                  class="d-inline"
+                                                  data-confirm="@row.KeepFileIdentityConfirmation">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="movieId" value="@movie.Id" />
+                                                <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
+                                                <button type="submit"
+                                                        class="btn btn-sm btn-outline-primary"
+                                                        title="Name it @row.KeepFileIdentityName, as the file says. The IMDb ID stays @movie.ImdbId.">
+                                                    Keep file's name
+                                                </button>
+                                            </form>
+                                        }
+                                        @if (row.CanUndoKeepFileIdentity)
+                                        {
+                                            <form method="post" asp-page-handler="UndoKeepFileIdentity" class="d-inline">
+                                                @Html.AntiForgeryToken()
+                                                <input type="hidden" name="movieId" value="@movie.Id" />
+                                                <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
+                                                <button type="submit"
+                                                        class="btn btn-sm btn-outline-secondary"
+                                                        title="Stop keeping the name from the file. The choice between the file's name and OMDb's comes back.">
+                                                    Undo keep name
+                                                </button>
+                                            </form>
+                                        }
                                         @if (row.CanConfirmFileName)
                                         {
                                             <form method="post" asp-page-handler="ConfirmFileName" class="d-inline">
@@ -768,6 +797,15 @@
                                                         <br />
                                                         <span>OMDb did not provide a release year, so this suggestion cannot be accepted safely.</span>
                                                     }
+                                                </p>
+                                            }
+                                            @if (row.CanKeepFileIdentity)
+                                            {
+                                                <p class="mb-2">
+                                                    OMDb found IMDb ID @movie.ImdbId, but under a different title or year than this file.
+                                                    <strong>Accept match</strong> names the movie as OMDb does.
+                                                    <strong>Keep file's name</strong> names it @row.KeepFileIdentityName instead.
+                                                    The IMDb ID is the same either way, and Plex matches the movie by that ID.
                                                 </p>
                                             }
                                             <dl class="row mb-0">

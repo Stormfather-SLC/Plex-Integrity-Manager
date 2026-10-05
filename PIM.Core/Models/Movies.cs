@@ -344,6 +344,45 @@ namespace PIM.Core.Models
             HasMetadataSuggestion && SuggestedYear.HasValue;
 
         /// <summary>
+        /// The IMDb ID for which the owner chose to keep the title and year
+        /// from the file name instead of OMDb's wording for that ID. The ID is
+        /// recorded, not just a flag, so the decision lapses by itself if the
+        /// movie's IMDb ID ever changes.
+        /// </summary>
+        public string? FileIdentityKeptForImdbId { get; set; }
+
+        public bool IsFileIdentityKept =>
+            !string.IsNullOrWhiteSpace(FileIdentityKeptForImdbId) &&
+            string.Equals(
+                FileIdentityKeptForImdbId,
+                ImdbId,
+                StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The name the movie has when the owner keeps the file's identity:
+        /// the file's own title and year, with OMDb's used only for a part the
+        /// file name does not provide.
+        /// </summary>
+        public string? FileIdentityTitle =>
+            string.IsNullOrWhiteSpace(Title) ? SuggestedTitle : Title;
+
+        public int? FileIdentityYear => Year ?? SuggestedYear;
+
+        /// <summary>
+        /// OMDb found this movie's IMDb ID but lists it under a different
+        /// title or year than the file. The owner may then keep the file's
+        /// wording, with the same IMDb ID, instead of accepting OMDb's.
+        /// </summary>
+        public bool CanKeepFileIdentity =>
+            !HasError &&
+            HasMetadataReviewReason &&
+            MetadataLookupFailureType == MetadataLookupFailureType.ImdbIdentityConflict &&
+            !string.IsNullOrWhiteSpace(ImdbId) &&
+            string.Equals(ImdbId, SuggestedImdbId, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(FileIdentityTitle) &&
+            FileIdentityYear.HasValue;
+
+        /// <summary>
         /// Manual IMDb ID entry is offered only while identity is unresolved.
         /// </summary>
         public bool CanEnterImdbId =>
