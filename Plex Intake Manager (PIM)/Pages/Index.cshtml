@@ -619,6 +619,46 @@
             }
             else
             {
+                if (resultRows.Any(row => row.CanSelectForBulkChoice))
+                {
+                    <!-- One choice for several movies. The rows' tick boxes
+                         belong to this form (form="bulkChoiceForm"). Only
+                         close matches that keep the same IMDb ID can be
+                         ticked; the server applies the same rule again. -->
+                    <form method="post"
+                          id="bulkChoiceForm"
+                          class="d-flex flex-wrap align-items-center gap-2 border rounded bg-light px-2 py-2 mb-2"
+                          data-confirm-skippable="false"
+                          data-confirm-note="PIM always asks before changing several movies at once.">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" id="bulkSelectAll" />
+                            <label class="form-check-label" for="bulkSelectAll">Select all shown</label>
+                        </div>
+                        <span id="bulkSelectedCount" class="small text-muted">None ticked</span>
+                        <button type="submit"
+                                asp-page-handler="AcceptSelectedMatches"
+                                id="bulkAcceptButton"
+                                class="btn btn-sm btn-primary"
+                                title="Name every ticked movie as OMDb lists it. Each keeps its IMDb ID."
+                                disabled>
+                            Accept match for ticked
+                        </button>
+                        <button type="submit"
+                                asp-page-handler="KeepSelectedFileNames"
+                                id="bulkKeepButton"
+                                class="btn btn-sm btn-outline-primary"
+                                title="Name every ticked movie as its file says. Each keeps its IMDb ID."
+                                disabled>
+                            Keep file's name for ticked
+                        </button>
+                        <span class="small text-muted">
+                            Close matches that keep the same IMDb ID can be ticked. Others are decided one at a time.
+                        </span>
+                    </form>
+                }
+
                 <table class="table table-sm table-hover align-middle movie-results mb-0">
                     <thead class="table-light">
                         <tr>
@@ -642,7 +682,18 @@
                                 id="@rowId"
                                 data-movie-category="@row.FilterKey"
                                 data-details-id="@detailsId">
-                                <td>
+                                <td class="text-nowrap">
+                                    @if (row.State == MovieResultState.Decide)
+                                    {
+                                        <input type="checkbox"
+                                               class="form-check-input me-1 movie-select"
+                                               form="bulkChoiceForm"
+                                               name="movieIds"
+                                               value="@movie.Id"
+                                               title="@row.BulkSelectHint"
+                                               aria-label="Select @row.DisplayTitle"
+                                               disabled="@(!row.CanSelectForBulkChoice)" />
+                                    }
                                     <span class="badge @row.BadgeClass">@row.StateLabel</span>
                                 </td>
                                 <td>
@@ -1227,8 +1278,17 @@
 
                 if (isVisible) {
                     visibleCount++;
+                } else {
+                    // A tick the owner can no longer see must not be acted on.
+                    const selectBox = row.querySelector(".movie-select");
+
+                    if (selectBox) {
+                        selectBox.checked = false;
+                    }
                 }
             });
+
+            refreshBulkSelection();
 
             if (movieFilterStatus) {
                 movieFilterStatus.textContent =
@@ -1288,6 +1348,9 @@
         const confirmDontAsk = document.getElementById("confirmChoiceDontAsk");
         let confirmModal = null;
         let formAwaitingConfirmation = null;
+        let submitterAwaitingConfirmation = null;
+        const defaultAlwaysAsksNote =
+            document.getElementById("confirmChoiceAlwaysAsks")?.textContent ?? "";
 
         function readPreference(key) {
             try {
@@ -1330,10 +1393,17 @@
 
             confirmModalElement.addEventListener("hidden.bs.modal", function () {
                 formAwaitingConfirmation = null;
+                submitterAwaitingConfirmation = null;
             });
 
             document.getElementById("confirmChoiceOk")?.addEventListener("click", function () {
                 const form = formAwaitingConfirmation;
+                // Submit with the button that was pressed: a form with two
+                // buttons (the choice for several movies) posts to the
+                // handler that button names.
+                const submitter =
+                    submitterAwaitingConfirmation ??
+                    form?.querySelector('button[type="submit"]');
 
                 if (!form) {
                     return;
@@ -1345,7 +1415,7 @@
 
                 form.dataset.confirmed = "true";
                 confirmModal.hide();
-                form.requestSubmit(form.querySelector('button[type="submit"]'));
+                form.requestSubmit(submitter);
             });
         }
 
@@ -1356,21 +1426,134 @@
 
         refreshConfirmPreferenceStatus();
 
-        function askToConfirm(form) {
+        function askToConfirm(form, submitter) {
             const skippable = form.dataset.confirmSkippable === "true";
+            const alwaysAsksNote = document.getElementById("confirmChoiceAlwaysAsks");
 
             document.getElementById("confirmChoiceTitle").textContent =
                 form.dataset.confirmTitle || "Confirm";
             document.getElementById("confirmChoiceText").textContent = form.dataset.confirm;
             document.getElementById("confirmChoiceDontAskGroup").hidden = !skippable;
-            document.getElementById("confirmChoiceAlwaysAsks").hidden = skippable;
+            alwaysAsksNote.hidden = skippable;
+            alwaysAsksNote.textContent = form.dataset.confirmNote || defaultAlwaysAsksNote;
 
             if (confirmDontAsk) {
                 confirmDontAsk.checked = false;
             }
 
             formAwaitingConfirmation = form;
+            submitterAwaitingConfirmation = submitter ?? null;
             confirmModal.show();
+        }
+
+        // =====================================================
+        // ☑ ONE CHOICE FOR SEVERAL MOVIES
+        //
+        // Rows that qualify have a tick box. "Accept match for ticked" and
+        // "Keep file's name for ticked" apply the choice to every ticked
+        // movie in one go, after one confirmation that is always shown.
+        // Only ticks the owner can see count: changing the filter clears
+        // the ticks of rows it hides.
+        // =====================================================
+        const bulkForm = document.getElementById("bulkChoiceForm");
+        const bulkSelectAll = document.getElementById("bulkSelectAll");
+        const bulkSelectedCount = document.getElementById("bulkSelectedCount");
+        const bulkButtons = [
+            document.getElementById("bulkAcceptButton"),
+            document.getElementById("bulkKeepButton")
+        ].filter(Boolean);
+        const movieSelectBoxes = Array.from(
+            document.querySelectorAll(".movie-select:not(:disabled)"));
+
+        function tickedMovieBoxes() {
+            return movieSelectBoxes.filter(function (box) { return box.checked; });
+        }
+
+        function refreshBulkSelection() {
+            if (!bulkForm || !bulkSelectAll || !bulkSelectedCount) {
+                return;
+            }
+
+            const shown = movieSelectBoxes.filter(function (box) {
+                return !box.closest("tr").hidden;
+            });
+            const shownTicked = shown.filter(function (box) { return box.checked; }).length;
+            const ticked = tickedMovieBoxes().length;
+
+            bulkSelectedCount.textContent = ticked === 0
+                ? "None ticked"
+                : `${ticked} ticked`;
+            bulkButtons.forEach(function (button) { button.disabled = ticked === 0; });
+            bulkSelectAll.disabled = shown.length === 0;
+            bulkSelectAll.checked = shown.length > 0 && shownTicked === shown.length;
+            bulkSelectAll.indeterminate = shownTicked > 0 && shownTicked < shown.length;
+        }
+
+        movieSelectBoxes.forEach(function (box) {
+            box.addEventListener("change", refreshBulkSelection);
+        });
+
+        bulkSelectAll?.addEventListener("change", function () {
+            movieSelectBoxes.forEach(function (box) {
+                if (!box.closest("tr").hidden) {
+                    box.checked = bulkSelectAll.checked;
+                }
+            });
+
+            refreshBulkSelection();
+        });
+
+        // The confirmation states how many movies and what the choice means.
+        bulkButtons.forEach(function (button) {
+            button.addEventListener("click", function () {
+                const count = tickedMovieBoxes().length;
+                const one = count === 1;
+                const movies = `${count} ticked movie${one ? "" : "s"}`;
+
+                if (button.id === "bulkAcceptButton") {
+                    bulkForm.dataset.confirmTitle = "Accept match";
+                    bulkForm.dataset.confirm =
+                        `Name ${movies} as OMDb lists ${one ? "it" : "them"}? ` +
+                        `${one ? "It keeps" : "Each keeps"} its IMDb ID. ` +
+                        "Accept match has no undo: reversing it means scanning again.";
+                } else {
+                    bulkForm.dataset.confirmTitle = "Keep file's name";
+                    bulkForm.dataset.confirm =
+                        `Name ${movies} as ${one ? "its file says" : "their files say"}, ` +
+                        "instead of OMDb's wording? " +
+                        `${one ? "It keeps" : "Each keeps"} its IMDb ID. ` +
+                        "Keep file's name can be undone for each movie afterwards.";
+                }
+            });
+        });
+
+        // Applying a choice to many movies looks each one up, so show how far
+        // it has got beside the buttons until the page reloads.
+        function showBulkProgress() {
+            bulkSelectedCount.textContent = "Working...";
+
+            window.setInterval(async function () {
+                try {
+                    const response = await fetch("?handler=Progress", {
+                        cache: "no-store",
+                        credentials: "same-origin"
+                    });
+
+                    if (!response.ok) {
+                        return;
+                    }
+
+                    const progress = await response.json();
+
+                    if (progress.step) {
+                        bulkSelectedCount.textContent = Number(progress.total) > 0
+                            ? `${progress.step}: ${Number(progress.processed) || 0} of ${Number(progress.total)}`
+                            : progress.step;
+                    }
+                } catch {
+                    // Try again on the next tick.
+                }
+            }, 750);
         }
 
         // After a row action posts back, return to the same place with the
@@ -1393,12 +1576,16 @@
                     } else {
                         // Ask in the page; OK submits this form again.
                         event.preventDefault();
-                        askToConfirm(form);
+                        askToConfirm(form, event.submitter);
                         return;
                     }
                 }
 
                 delete form.dataset.confirmed;
+
+                if (form === bulkForm) {
+                    showBulkProgress();
+                }
 
                 const openDetails = Array.from(
                     document.querySelectorAll("[data-toggle-details][aria-expanded='true']"))

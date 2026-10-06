@@ -1444,7 +1444,8 @@ public sealed partial class IndexModelSafetyTests
             List<Movie> allMovies,
             DestinationProfile profile,
             string sourceRoot,
-            LibraryGoal libraryGoal)
+            LibraryGoal libraryGoal,
+            bool rebuildPlan = true)
         {
             return Task.FromResult(false);
         }
@@ -1471,7 +1472,8 @@ public sealed partial class IndexModelSafetyTests
             List<Movie> allMovies,
             DestinationProfile profile,
             string sourceRoot,
-            LibraryGoal libraryGoal)
+            LibraryGoal libraryGoal,
+            bool rebuildPlan = true)
         {
             KeptFileIdentities.Add(movie.Id);
             movie.FileIdentityKeptForImdbId = movie.ImdbId;

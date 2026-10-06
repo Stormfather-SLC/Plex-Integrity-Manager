@@ -187,8 +187,32 @@ public sealed class MovieResultRow
     /// is a close match. A choice that would set or change the IMDb ID, or a
     /// distant match, always asks.
     /// </summary>
-    public bool CanSkipIdentityConfirmation =>
-        CanKeepFileIdentity && Movie.MatchConfidence is >= 85;
+    public bool CanSkipIdentityConfirmation => IsCloseMatchNameChoice(Movie);
+
+    /// <summary>
+    /// The one rule for both "don't ask again" and choosing several movies at
+    /// once: OMDb found the movie's own IMDb ID, the ID stays the same
+    /// whichever name is picked, and OMDb's listing is a close match. The
+    /// page handlers apply it again on the server; the page cannot widen it.
+    /// </summary>
+    public static bool IsCloseMatchNameChoice(Movie movie) =>
+        movie.NeedsReview &&
+        movie.CanKeepFileIdentity &&
+        movie.MatchConfidence is >= 85;
+
+    /// <summary>
+    /// The movie can be ticked and decided together with others. Every other
+    /// decision is made one movie at a time.
+    /// </summary>
+    public bool CanSelectForBulkChoice => IsCloseMatchNameChoice(Movie);
+
+    /// <summary>Tooltip for the row's tick box, enabled or not.</summary>
+    public string BulkSelectHint =>
+        CanSelectForBulkChoice
+            ? "Tick to accept the match or keep the file's name for several movies at once."
+            : CanAcceptSuggestion || CanKeepFileIdentity
+                ? "Decide this one on its own: the match is not close, or accepting would set its IMDb ID."
+                : "Decide this one on its own: it needs a different kind of decision.";
 
     public bool CanKeepThisCopy => Movie.HasDuplicateTieReview;
 

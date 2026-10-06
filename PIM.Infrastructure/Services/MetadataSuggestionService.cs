@@ -21,7 +21,8 @@ public sealed class MetadataSuggestionService : IMetadataSuggestionService
         List<Movie> allMovies,
         DestinationProfile profile,
         string sourceRoot,
-        LibraryGoal libraryGoal)
+        LibraryGoal libraryGoal,
+        bool rebuildPlan = true)
     {
         ArgumentNullException.ThrowIfNull(movie);
         ArgumentNullException.ThrowIfNull(allMovies);
@@ -49,11 +50,14 @@ public sealed class MetadataSuggestionService : IMetadataSuggestionService
 
         await _metadata.EnrichAsync(movie);
 
-        _moviePlan.Rebuild(
-            allMovies,
-            profile,
-            sourceRoot,
-            libraryGoal);
+        if (rebuildPlan)
+        {
+            _moviePlan.Rebuild(
+                allMovies,
+                profile,
+                sourceRoot,
+                libraryGoal);
+        }
 
         return true;
     }
@@ -103,7 +107,8 @@ public sealed class MetadataSuggestionService : IMetadataSuggestionService
         List<Movie> allMovies,
         DestinationProfile profile,
         string sourceRoot,
-        LibraryGoal libraryGoal)
+        LibraryGoal libraryGoal,
+        bool rebuildPlan = true)
     {
         ArgumentNullException.ThrowIfNull(movie);
         ArgumentNullException.ThrowIfNull(allMovies);
@@ -131,11 +136,14 @@ public sealed class MetadataSuggestionService : IMetadataSuggestionService
         // the lookup honours the decision instead of raising the same conflict.
         await _metadata.EnrichAsync(movie);
 
-        _moviePlan.Rebuild(
-            allMovies,
-            profile,
-            sourceRoot,
-            libraryGoal);
+        if (rebuildPlan)
+        {
+            _moviePlan.Rebuild(
+                allMovies,
+                profile,
+                sourceRoot,
+                libraryGoal);
+        }
 
         return true;
     }
