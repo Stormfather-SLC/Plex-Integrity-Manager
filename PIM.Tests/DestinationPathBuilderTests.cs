@@ -28,6 +28,35 @@ public sealed class DestinationPathBuilderTests
             result.FullFilePath);
     }
 
+    [Theory]
+    // OMDb titles keep their real punctuation. Windows forbids these
+    // characters in names, so each becomes an underscore on disk.
+    [InlineData("Munich: The Edge of War", "Munich_ The Edge of War")]
+    [InlineData("Cinderella 2: Dreams Come True", "Cinderella 2_ Dreams Come True")]
+    [InlineData("Face/Off", "Face_Off")]
+    [InlineData("Who Framed Roger Rabbit?", "Who Framed Roger Rabbit_")]
+    [InlineData("Mission: Impossible - Fallout", "Mission_ Impossible - Fallout")]
+    [InlineData("What \"If\" <Maybe> *Stars* |Pipe| Back\\Slash", "What _If_ _Maybe_ _Stars_ _Pipe_ Back_Slash")]
+    public void Build_TitleWithCharactersWindowsForbids_UsesUnderscoresInTheFolderAndFileName(
+        string title,
+        string expectedNameOnDisk)
+    {
+        var profile = CreateProfile();
+        var movie = CreateMovie();
+        movie.Title = title;
+
+        var result = _builder.Build(movie, profile, CreateSourceRoot(), ".mkv");
+
+        var expected = $"{expectedNameOnDisk} (1985) {{imdb-tt0088794}}";
+        Assert.Equal(expected, result.MovieFolderName);
+        Assert.Equal($"{expected}.mkv", result.FileName);
+        Assert.Equal(
+            Path.Combine(Path.GetFullPath(profile.DestinationRoot), expected, $"{expected}.mkv"),
+            result.FullFilePath);
+        Assert.Equal(-1, result.MovieFolderName.IndexOfAny(Path.GetInvalidFileNameChars()));
+        Assert.Equal(-1, result.FileName.IndexOfAny(Path.GetInvalidFileNameChars()));
+    }
+
     [Fact]
     public void Build_GenreThenRating_ReversesTheFolderOrder()
     {
