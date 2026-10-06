@@ -179,6 +179,17 @@ public sealed class MovieResultRow
 
     public bool CanUndoKeepFileIdentity => Movie.IsFileIdentityKept;
 
+    /// <summary>
+    /// Whether the owner may switch off the confirmation for this row's
+    /// identity choices ("don't ask again"). Only where nothing but the
+    /// wording of the name is being chosen: OMDb found the movie's own IMDb
+    /// ID, that ID stays the same whichever name is picked, and OMDb's listing
+    /// is a close match. A choice that would set or change the IMDb ID, or a
+    /// distant match, always asks.
+    /// </summary>
+    public bool CanSkipIdentityConfirmation =>
+        CanKeepFileIdentity && Movie.MatchConfidence is >= 85;
+
     public bool CanKeepThisCopy => Movie.HasDuplicateTieReview;
 
     public bool CanConfirmFileName => Movie.HasSuspiciousFileNameReview;
