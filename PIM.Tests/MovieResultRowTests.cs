@@ -417,6 +417,58 @@ public sealed class MovieResultRowTests
         Assert.False(row.CanAcceptSuggestion);
     }
 
+    [Theory]
+    // Same IMDb ID, close match: only the wording of the name is at stake.
+    [InlineData("tt8579674", "tt8579674", 90, true)]
+    [InlineData("tt8579674", "tt8579674", 85, true)]
+    // Same IMDb ID but a distant match: could be the wrong ID in the file.
+    [InlineData("tt8579674", "tt8579674", 82, false)]
+    [InlineData("tt8579674", "tt8579674", 75, false)]
+    // OMDb answered for a different ID than the movie's.
+    [InlineData("tt8579674", "tt9999999", 90, false)]
+    public void DontAskAgain_IsOfferedOnlyForCloseMatchesThatKeepTheSameImdbId(
+        string movieImdbId,
+        string suggestedImdbId,
+        double confidence,
+        bool expected)
+    {
+        var movie = Unidentified("1917", 2019);
+        movie.ImdbId = movieImdbId;
+        movie.SuggestedTitle = "1917";
+        movie.SuggestedYear = 2020;
+        movie.SuggestedImdbId = suggestedImdbId;
+        movie.MatchConfidence = confidence;
+        movie.SetMetadataReview(
+            "The provided IMDb ID does not match the movie year provided.",
+            MetadataLookupFailureType.ImdbIdentityConflict);
+
+        var row = Row(movie);
+
+        Assert.True(row.CanAcceptSuggestion);
+        Assert.Equal(expected, row.CanSkipIdentityConfirmation);
+    }
+
+    [Fact]
+    public void DontAskAgain_IsNeverOfferedWhenAcceptingWouldSetTheImdbId()
+    {
+        // A title-based suggestion, however confident: accepting it gives the
+        // movie an IMDb ID it did not have, so PIM always asks.
+        var movie = Unidentified("Back to the Future", 1986);
+        movie.SuggestedTitle = "Back to the Future";
+        movie.SuggestedYear = 1985;
+        movie.SuggestedImdbId = "tt0088763";
+        movie.MatchConfidence = 90;
+        movie.SetMetadataReview(
+            "Possible OMDb match: Back to the Future (1985)",
+            MetadataLookupFailureType.FuzzyCandidateYearConflict);
+
+        var row = Row(movie);
+
+        Assert.True(row.CanAcceptSuggestion);
+        Assert.False(row.IsLowConfidenceSuggestion);
+        Assert.False(row.CanSkipIdentityConfirmation);
+    }
+
     [Fact]
     public void Destination_IsShownOnlyOnceTheIdentityIsConfirmed()
     {

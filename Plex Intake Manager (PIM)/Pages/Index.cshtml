@@ -570,6 +570,49 @@
 
             <p id="movieFilterStatus" class="text-muted small mb-2"></p>
 
+            <!-- Shown only while the owner has switched off the confirmation
+                 for close-match name choices; see the confirm dialog below. -->
+            <p id="confirmPreferenceStatus" class="small mb-2" hidden>
+                ⚡ Not asking before <strong>Accept match</strong> or <strong>Keep file's name</strong>
+                when the IMDb ID stays the same and the match is close.
+                <button type="button" class="btn btn-link btn-sm p-0 align-baseline" id="confirmPreferenceReset">
+                    Ask again
+                </button>
+            </p>
+
+            <!-- Confirmation for identity choices. Replaces the browser's own
+                 confirm box so it can offer "don't ask again". -->
+            <div class="modal fade"
+                 id="confirmChoiceModal"
+                 tabindex="-1"
+                 aria-labelledby="confirmChoiceTitle"
+                 aria-hidden="true">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="confirmChoiceTitle">Confirm</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p id="confirmChoiceText" class="mb-3"></p>
+                            <div class="form-check" id="confirmChoiceDontAskGroup">
+                                <input class="form-check-input" type="checkbox" id="confirmChoiceDontAsk" />
+                                <label class="form-check-label" for="confirmChoiceDontAsk">
+                                    Don't ask again when the IMDb ID stays the same and the match is close
+                                </label>
+                            </div>
+                            <p id="confirmChoiceAlwaysAsks" class="small text-muted mb-0" hidden>
+                                PIM always asks about this one: the match is not close, or it would set the movie's IMDb ID.
+                            </p>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" class="btn btn-primary" id="confirmChoiceOk">OK</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             @if (!resultRows.Any())
             {
                 <p class="text-muted">No movies scanned yet. Use <strong>Scan Movies</strong> to begin.</p>
@@ -683,7 +726,9 @@
                                             <form method="post"
                                                   asp-page-handler="AcceptSuggestedMatch"
                                                   class="d-inline"
-                                                  data-confirm="@row.AcceptConfirmation">
+                                                  data-confirm="@row.AcceptConfirmation"
+                                                  data-confirm-title="Accept match"
+                                                  data-confirm-skippable="@(row.CanSkipIdentityConfirmation ? "true" : "false")">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="movieId" value="@movie.Id" />
                                                 <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
@@ -699,7 +744,9 @@
                                             <form method="post"
                                                   asp-page-handler="KeepFileIdentity"
                                                   class="d-inline"
-                                                  data-confirm="@row.KeepFileIdentityConfirmation">
+                                                  data-confirm="@row.KeepFileIdentityConfirmation"
+                                                  data-confirm-title="Keep file's name"
+                                                  data-confirm-skippable="@(row.CanSkipIdentityConfirmation ? "true" : "false")">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="movieId" value="@movie.Id" />
                                                 <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
@@ -1226,15 +1273,132 @@
             });
         });
 
+        // =====================================================
+        // ✔ CONFIRMING IDENTITY CHOICES
+        //
+        // Accept match and Keep file's name set a movie's identity, so each
+        // asks first. The owner may switch that off ("don't ask again"), but
+        // only for rows the server marks skippable: the IMDb ID stays the
+        // same and the match is close. Everything else always asks. The
+        // choice is remembered in this browser until "Ask again" is used.
+        // =====================================================
+        const skipConfirmStorageKey = "pim.skipCloseMatchConfirmations";
+        const confirmModalElement = document.getElementById("confirmChoiceModal");
+        const confirmPreferenceStatus = document.getElementById("confirmPreferenceStatus");
+        const confirmDontAsk = document.getElementById("confirmChoiceDontAsk");
+        let confirmModal = null;
+        let formAwaitingConfirmation = null;
+
+        function readPreference(key) {
+            try {
+                return window.localStorage.getItem(key);
+            } catch {
+                return null;
+            }
+        }
+
+        function writePreference(key, value) {
+            try {
+                if (value === null) {
+                    window.localStorage.removeItem(key);
+                } else {
+                    window.localStorage.setItem(key, value);
+                }
+            } catch {
+                // Without storage PIM simply keeps asking.
+            }
+        }
+
+        function isSkippingCloseMatchConfirmations() {
+            return readPreference(skipConfirmStorageKey) === "true";
+        }
+
+        function refreshConfirmPreferenceStatus() {
+            if (confirmPreferenceStatus) {
+                confirmPreferenceStatus.hidden = !isSkippingCloseMatchConfirmations();
+            }
+        }
+
+        if (confirmModalElement && window.bootstrap?.Modal) {
+            // A dialog must sit directly under <body> to cover the page.
+            document.body.appendChild(confirmModalElement);
+            confirmModal = new window.bootstrap.Modal(confirmModalElement);
+
+            confirmModalElement.addEventListener("shown.bs.modal", function () {
+                document.getElementById("confirmChoiceOk")?.focus();
+            });
+
+            confirmModalElement.addEventListener("hidden.bs.modal", function () {
+                formAwaitingConfirmation = null;
+            });
+
+            document.getElementById("confirmChoiceOk")?.addEventListener("click", function () {
+                const form = formAwaitingConfirmation;
+
+                if (!form) {
+                    return;
+                }
+
+                if (form.dataset.confirmSkippable === "true" && confirmDontAsk?.checked) {
+                    writePreference(skipConfirmStorageKey, "true");
+                }
+
+                form.dataset.confirmed = "true";
+                confirmModal.hide();
+                form.requestSubmit(form.querySelector('button[type="submit"]'));
+            });
+        }
+
+        document.getElementById("confirmPreferenceReset")?.addEventListener("click", function () {
+            writePreference(skipConfirmStorageKey, null);
+            refreshConfirmPreferenceStatus();
+        });
+
+        refreshConfirmPreferenceStatus();
+
+        function askToConfirm(form) {
+            const skippable = form.dataset.confirmSkippable === "true";
+
+            document.getElementById("confirmChoiceTitle").textContent =
+                form.dataset.confirmTitle || "Confirm";
+            document.getElementById("confirmChoiceText").textContent = form.dataset.confirm;
+            document.getElementById("confirmChoiceDontAskGroup").hidden = !skippable;
+            document.getElementById("confirmChoiceAlwaysAsks").hidden = skippable;
+
+            if (confirmDontAsk) {
+                confirmDontAsk.checked = false;
+            }
+
+            formAwaitingConfirmation = form;
+            confirmModal.show();
+        }
+
         // After a row action posts back, return to the same place with the
         // same details open instead of jumping to the top of the page.
         document.querySelectorAll("#movies-pane form").forEach(function (form) {
             form.addEventListener("submit", function (event) {
-                // Low-confidence matches need an explicit second confirmation.
-                if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) {
-                    event.preventDefault();
-                    return;
+                const needsConfirmation =
+                    form.dataset.confirm &&
+                    form.dataset.confirmed !== "true" &&
+                    !(form.dataset.confirmSkippable === "true" &&
+                      isSkippingCloseMatchConfirmations());
+
+                if (needsConfirmation) {
+                    if (!confirmModal) {
+                        // No dialog available: fall back to the browser's own.
+                        if (!window.confirm(form.dataset.confirm)) {
+                            event.preventDefault();
+                            return;
+                        }
+                    } else {
+                        // Ask in the page; OK submits this form again.
+                        event.preventDefault();
+                        askToConfirm(form);
+                        return;
+                    }
                 }
+
+                delete form.dataset.confirmed;
 
                 const openDetails = Array.from(
                     document.querySelectorAll("[data-toggle-details][aria-expanded='true']"))
