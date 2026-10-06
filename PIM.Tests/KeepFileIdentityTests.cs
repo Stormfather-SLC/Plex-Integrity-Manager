@@ -323,6 +323,44 @@ public sealed class KeepFileIdentityTests
     }
 
     [Fact]
+    public async Task ChoiceForSeveralMovies_CanLeaveThePlanRebuildToTheCaller()
+    {
+        // Answers in request order: both first lookups, then one per choice.
+        var handler = new QueuedHandler(Omdb1917, OmdbMules, Omdb1917, OmdbMules);
+        var plan = new CountingPlanService();
+        var (metadata, service) = CreateServices(handler, plan);
+        var kept = FileMovie("1917", 2019, ImdbId1917);
+        var accepted = FileMovie("Mules", 2022, "tt18924506");
+        var movies = new List<Movie> { kept, accepted };
+        await metadata.EnrichAsync(kept);
+        await metadata.EnrichAsync(accepted);
+
+        Assert.True(await service.KeepFileIdentityAsync(
+            kept,
+            movies,
+            CreateProfile(),
+            string.Empty,
+            LibraryGoal.OrganizeNewMovies,
+            rebuildPlan: false));
+        Assert.True(await service.AcceptAsync(
+            accepted,
+            movies,
+            CreateProfile(),
+            string.Empty,
+            LibraryGoal.OrganizeNewMovies,
+            rebuildPlan: false));
+
+        // Both choices were applied and looked up; the single plan rebuild is
+        // the caller's to do once for the whole batch.
+        Assert.Equal(0, plan.CallCount);
+        Assert.True(kept.IsFileIdentityKept);
+        Assert.Equal(2019, kept.Year);
+        Assert.Equal("2000 Mules", accepted.Title);
+        Assert.True(kept.MetadataFetched);
+        Assert.True(accepted.MetadataFetched);
+    }
+
+    [Fact]
     public async Task PlexStyleNameWithANumberInItsTitle_IsIdentifiedWithoutAnyDecision()
     {
         // Read literally, "Wonder Woman 1984" agrees with OMDb, so there is

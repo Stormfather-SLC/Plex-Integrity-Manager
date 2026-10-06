@@ -688,6 +688,140 @@ namespace PIM.Web.Pages
             });
         }
 
+        public Task<IActionResult> OnPostAcceptSelectedMatchesAsync(List<Guid>? movieIds) =>
+            RunExclusiveAsync(
+                DecisionAction,
+                () => ApplyChoiceToSelectedAsync(movieIds, keepFileName: false));
+
+        public Task<IActionResult> OnPostKeepSelectedFileNamesAsync(List<Guid>? movieIds) =>
+            RunExclusiveAsync(
+                DecisionAction,
+                () => ApplyChoiceToSelectedAsync(movieIds, keepFileName: true));
+
+        /// <summary>
+        /// Applies Accept match or Keep file's name to every ticked movie that
+        /// qualifies. Only close matches that keep the same IMDb ID can be
+        /// decided together; anything else that was ticked is left unchanged
+        /// for the owner to decide on its own. The plan is rebuilt once.
+        /// </summary>
+        private async Task<IActionResult> ApplyChoiceToSelectedAsync(
+            List<Guid>? movieIds,
+            bool keepFileName)
+        {
+            var choice = keepFileName ? "Keep file's name" : "Accept match";
+            var selectedIds = (movieIds ?? new List<Guid>()).ToHashSet();
+
+            if (selectedIds.Count == 0)
+            {
+                TempData["Message"] = "No movies were ticked. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            if (!TryGetCachedMovies(out var movies))
+            {
+                TempData["Message"] = "The scan is no longer available. Scan the source folder again.";
+                return RedirectToPage();
+            }
+
+            var eligible = movies
+                .Where(movie =>
+                    selectedIds.Contains(movie.Id) &&
+                    MovieResultRow.IsCloseMatchNameChoice(movie) &&
+                    (keepFileName || movie.CanAcceptMetadataSuggestion))
+                .ToList();
+            var leftUnchanged = selectedIds.Count - eligible.Count;
+
+            if (eligible.Count == 0)
+            {
+                TempData["Message"] =
+                    $"None of the ticked movies can use {choice} together with others. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            InvalidateDryRunApproval();
+
+            _logger.LogInformation(
+                "User applied {Choice} to {Count} ticked movie(s) at once ({LeftUnchanged} ticked movie(s) did not qualify); invalidating prior dry-run approval and rebuilding the plan.",
+                choice,
+                eligible.Count,
+                leftUnchanged);
+
+            var profile = _profileStore.GetActiveProfile();
+            var sourceRoot = _config["PIM:ScanPath"] ?? string.Empty;
+            var libraryGoal = GetConfiguredLibraryGoal();
+            var applied = new List<Movie>();
+
+            try
+            {
+                BeginStep(1, 2, $"Applying {choice} to {CountOf(eligible.Count, "movie")}");
+                _progress.Total = eligible.Count;
+                _progress.IsRunning = true;
+
+                foreach (var movie in eligible)
+                {
+                    _progress.CurrentFile = movie.FileName ?? string.Empty;
+
+                    var changed = keepFileName
+                        ? await _metadataSuggestion.KeepFileIdentityAsync(
+                            movie,
+                            movies,
+                            profile,
+                            sourceRoot,
+                            libraryGoal,
+                            rebuildPlan: false)
+                        : await _metadataSuggestion.AcceptAsync(
+                            movie,
+                            movies,
+                            profile,
+                            sourceRoot,
+                            libraryGoal,
+                            rebuildPlan: false);
+
+                    if (changed)
+                        applied.Add(movie);
+
+                    _progress.Processed++;
+                }
+
+                BeginStep(2, 2, "Checking duplicates, the destination folder and Plex");
+                _moviePlan.Rebuild(
+                    movies,
+                    profile,
+                    sourceRoot,
+                    libraryGoal);
+                SetCachedMovies(movies);
+            }
+            finally
+            {
+                ResetProgress(isRunning: false);
+            }
+
+            var needAttention = applied.Count(movie => movie.NeedsReview || movie.HasError);
+
+            TempData["Message"] =
+                $"{choice} was applied to {CountOf(applied.Count, "movie")}." +
+                (needAttention == 0
+                    ? string.Empty
+                    : applied.Count == 1
+                        ? " It still needs attention; see Movie Results."
+                        : $" {needAttention:N0} of them still {(needAttention == 1 ? "needs" : "need")} attention; see Movie Results.") +
+                (leftUnchanged > 0
+                    ? $" {CountOf(leftUnchanged, "ticked movie")} {(leftUnchanged == 1 ? "was" : "were")} left unchanged, to be decided one at a time."
+                    : string.Empty) +
+                " Run a new dry run before live commit.";
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
+        }
+
         public Task<IActionResult> OnPostUndoKeepFileIdentityAsync(Guid movieId) =>
             RunExclusiveAsync(DecisionAction, () => UndoKeepFileIdentityAsync(movieId));
 

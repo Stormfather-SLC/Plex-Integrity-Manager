@@ -449,6 +449,42 @@ public sealed class MovieResultRowTests
     }
 
     [Fact]
+    public void TickBox_IsEnabledOnlyForMoviesThatCanBeDecidedTogether()
+    {
+        Movie SameIdListedDifferently(double confidence)
+        {
+            var movie = Unidentified("1917", 2019);
+            movie.ImdbId = "tt8579674";
+            movie.SuggestedTitle = "1917";
+            movie.SuggestedYear = 2020;
+            movie.SuggestedImdbId = "tt8579674";
+            movie.MatchConfidence = confidence;
+            movie.SetMetadataReview(
+                "The provided IMDb ID does not match the movie year provided.",
+                MetadataLookupFailureType.ImdbIdentityConflict);
+            return movie;
+        }
+
+        var closeMatch = Row(SameIdListedDifferently(90));
+        var distantMatch = Row(SameIdListedDifferently(82));
+        var noSuggestion = Unidentified("Btter Of Ded", 1985);
+        noSuggestion.SetMetadataReview(
+            "IMDb ID could not be determined",
+            MetadataLookupFailureType.MovieNotFound);
+        var otherDecision = Row(noSuggestion);
+
+        Assert.True(closeMatch.CanSelectForBulkChoice);
+        Assert.StartsWith("Tick to accept the match or keep the file's name", closeMatch.BulkSelectHint);
+
+        Assert.False(distantMatch.CanSelectForBulkChoice);
+        Assert.StartsWith("Decide this one on its own: the match is not close", distantMatch.BulkSelectHint);
+
+        Assert.Equal(MovieResultState.Decide, otherDecision.State);
+        Assert.False(otherDecision.CanSelectForBulkChoice);
+        Assert.StartsWith("Decide this one on its own: it needs a different kind", otherDecision.BulkSelectHint);
+    }
+
+    [Fact]
     public void DontAskAgain_IsNeverOfferedWhenAcceptingWouldSetTheImdbId()
     {
         // A title-based suggestion, however confident: accepting it gives the

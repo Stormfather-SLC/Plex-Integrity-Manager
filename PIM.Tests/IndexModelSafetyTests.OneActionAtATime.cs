@@ -141,6 +141,8 @@ public sealed partial class IndexModelSafetyTests
         await Refused().OnPostAcceptSuggestedMatchAsync(first.Id);
         await Refused().OnPostKeepFileIdentityAsync(first.Id);
         await Refused().OnPostUndoKeepFileIdentityAsync(first.Id);
+        await Refused().OnPostAcceptSelectedMatchesAsync(new List<Guid> { first.Id });
+        await Refused().OnPostKeepSelectedFileNamesAsync(new List<Guid> { first.Id });
 
         Assert.All(
             refused,
