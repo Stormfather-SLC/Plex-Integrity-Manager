@@ -41,8 +41,11 @@
 
 @if (TempData["Message"] != null)
 {
-    <div class="alert alert-info mt-3">
+    <!-- Stays in view: after a row action the page returns to that row, so a
+         message at the top of the page would go unseen. -->
+    <div class="alert alert-info alert-dismissible pim-message" role="status">
         @TempData["Message"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>
 }
 
@@ -283,6 +286,41 @@
 
     .movie-results-row[aria-expanded="true"] .details-caret::before {
         content: "\25BE";
+    }
+
+    .pim-message {
+        position: fixed;
+        top: 1rem;
+        right: 1rem;
+        z-index: 1080;
+        max-width: min(40rem, calc(100vw - 2rem));
+        box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+    }
+
+    /* Changes waiting to be applied, and the bar that applies them. */
+    .movie-results-row.has-pending-change > td {
+        background-color: #fff8e1;
+    }
+
+    .pending-change {
+        color: #664d03;
+        text-align: right;
+        white-space: normal;
+    }
+
+    .pending-changes-bar {
+        position: fixed;
+        left: 50%;
+        bottom: 1rem;
+        transform: translateX(-50%);
+        z-index: 1070;
+        width: max-content;
+        max-width: calc(100vw - 2rem);
+        box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.2);
+    }
+
+    .pending-changes-bar[hidden] {
+        display: none !important;
     }
 
     .movie-results .movie-details-row > td {
@@ -570,7 +608,7 @@
                 var recommendedValue = Model.ShowOnlyRecommended.ToString().ToLowerInvariant();
                 var stateCards = new[]
                 {
-                    (Key: "decide", Label: "Your decision", Css: "text-primary", Hint: "PIM needs you to choose; use the buttons on each row"),
+                    (Key: "decide", Label: "Needs Review", Css: "text-primary", Hint: "PIM needs you to choose; use the buttons on each row"),
                     (Key: "blocked", Label: "Blocked", Css: "count-blocked", Hint: "Fix the cause outside PIM, then run a new dry run"),
                     (Key: "error", Label: "Errors", Css: "text-danger", Hint: "Could not be processed"),
                     (Key: "ready", Label: "Ready", Css: "text-success", Hint: "Will be moved by a live commit after a dry run"),
@@ -719,6 +757,7 @@
 
                             <tr class="movie-results-row"
                                 id="@rowId"
+                                data-movie-id="@movie.Id"
                                 data-movie-category="@row.FilterKey"
                                 data-details-id="@detailsId"
                                 data-toggle-details="@detailsId"
@@ -776,10 +815,10 @@
                                     }
                                 </td>
                                 <td class="text-nowrap actions-cell">
-                                    <div class="d-flex gap-1 justify-content-end">
+                                    <div class="d-flex gap-1 justify-content-end row-actions">
                                         @if (row.CanAddPlexDuplicate)
                                         {
-                                            <form method="post" asp-page-handler="AddPlexDuplicate" class="d-inline">
+                                            <form method="post" asp-page-handler="AddPlexDuplicate" class="d-inline" data-decision="addPlexDuplicate">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="movieId" value="@movie.Id" />
                                                 <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
@@ -792,7 +831,7 @@
                                         }
                                         @if (row.CanUndoPlexDuplicate)
                                         {
-                                            <form method="post" asp-page-handler="UndoPlexDuplicate" class="d-inline">
+                                            <form method="post" asp-page-handler="UndoPlexDuplicate" class="d-inline" data-decision="undoPlexDuplicate">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="movieId" value="@movie.Id" />
                                                 <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
@@ -805,7 +844,7 @@
                                         }
                                         @if (row.CanKeepThisCopy)
                                         {
-                                            <form method="post" asp-page-handler="KeepDuplicateCopy" class="d-inline">
+                                            <form method="post" asp-page-handler="KeepDuplicateCopy" class="d-inline" data-decision="keepCopy">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="movieId" value="@movie.Id" />
                                                 <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
@@ -820,6 +859,7 @@
                                         {
                                             <form method="post"
                                                   asp-page-handler="AcceptSuggestedMatch"
+                                                  data-decision="accept"
                                                   class="d-inline"
                                                   data-confirm="@row.AcceptConfirmation"
                                                   data-confirm-title="Accept match"
@@ -838,6 +878,7 @@
                                         {
                                             <form method="post"
                                                   asp-page-handler="KeepFileIdentity"
+                                                  data-decision="keepName"
                                                   class="d-inline"
                                                   data-confirm="@row.KeepFileIdentityConfirmation"
                                                   data-confirm-title="Keep file's name"
@@ -854,7 +895,7 @@
                                         }
                                         @if (row.CanUndoKeepFileIdentity)
                                         {
-                                            <form method="post" asp-page-handler="UndoKeepFileIdentity" class="d-inline">
+                                            <form method="post" asp-page-handler="UndoKeepFileIdentity" class="d-inline" data-decision="undoKeepName">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="movieId" value="@movie.Id" />
                                                 <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
@@ -867,7 +908,7 @@
                                         }
                                         @if (row.CanConfirmFileName)
                                         {
-                                            <form method="post" asp-page-handler="ConfirmFileName" class="d-inline">
+                                            <form method="post" asp-page-handler="ConfirmFileName" class="d-inline" data-decision="confirmName">
                                                 @Html.AntiForgeryToken()
                                                 <input type="hidden" name="movieId" value="@movie.Id" />
                                                 <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
@@ -878,15 +919,10 @@
                                                 </button>
                                             </form>
                                         }
-                                        @if (row.CanEnterImdbId)
-                                        {
-                                            <button type="button"
-                                                    class="btn btn-sm btn-outline-primary"
-                                                    data-open-details="@detailsId"
-                                                    data-focus="imdb-@movie.Id">
-                                                Enter IMDb ID
-                                            </button>
-                                        }
+                                    </div>
+                                    <div class="pending-change small" hidden>
+                                        <span class="pending-change-text"></span>
+                                        <button type="button" class="btn btn-sm btn-link p-0 ms-1 align-baseline" data-undo-change>Undo</button>
                                     </div>
                                 </td>
                             </tr>
@@ -1047,7 +1083,7 @@
                                             </div>
                                             @if (row.CanEnterImdbId)
                                             {
-                                                <form method="post" asp-page-handler="SetImdbId" class="mt-2 p-2 bg-white border rounded">
+                                                <form method="post" asp-page-handler="SetImdbId" class="mt-2 p-2 bg-white border rounded" data-decision="imdb">
                                                     @Html.AntiForgeryToken()
                                                     <input type="hidden" name="movieId" value="@movie.Id" />
                                                     <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
@@ -1077,6 +1113,20 @@
                         }
                     </tbody>
                 </table>
+
+                <!-- Row changes wait here, with no page reload, until the
+                     owner applies them all at once. -->
+                <form method="post"
+                      asp-page-handler="ApplyDecisions"
+                      id="pendingChangesForm"
+                      class="pending-changes-bar alert alert-warning d-flex flex-wrap align-items-center gap-2 mb-0 py-2"
+                      hidden>
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="ShowOnlyRecommended" value="@recommendedValue" />
+                    <span id="pendingChangesText"></span>
+                    <button type="submit" class="btn btn-sm btn-primary" id="pendingChangesApply">Apply changes</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="pendingChangesDiscard">Discard</button>
+                </form>
             }
         </div>
 
@@ -1376,18 +1426,6 @@
             });
         });
 
-        document.querySelectorAll("[data-open-details]").forEach(function (button) {
-            button.addEventListener("click", function () {
-                const toggle = detailsToggleFor(button.dataset.openDetails);
-
-                if (toggle) {
-                    setDetailsOpen(toggle, true);
-                }
-
-                document.getElementById(button.dataset.focus)?.focus();
-            });
-        });
-
         // =====================================================
         // ✔ CONFIRMING IDENTITY CHOICES
         //
@@ -1582,10 +1620,10 @@
             });
         });
 
-        // Applying a choice to many movies looks each one up, so show how far
-        // it has got beside the buttons until the page reloads.
-        function showBulkProgress() {
-            bulkSelectedCount.textContent = "Working...";
+        // Applying changes looks movies up, so show how far it has got until
+        // the page reloads.
+        function showApplyProgress(target) {
+            target.textContent = "Working...";
 
             window.setInterval(async function () {
                 try {
@@ -1601,7 +1639,7 @@
                     const progress = await response.json();
 
                     if (progress.step) {
-                        bulkSelectedCount.textContent = Number(progress.total) > 0
+                        target.textContent = Number(progress.total) > 0
                             ? `${progress.step}: ${Number(progress.processed) || 0} of ${Number(progress.total)}`
                             : progress.step;
                     }
@@ -1611,8 +1649,168 @@
             }, 750);
         }
 
-        // After a row action posts back, return to the same place with the
-        // same details open instead of jumping to the top of the page.
+        // =====================================================
+        // ⏳ CHANGES WAITING TO BE APPLIED
+        //
+        // A row's choice (Accept match, Keep file's name, an IMDb ID, ...)
+        // does not post on its own: rebuilding the plan takes a while, and
+        // the owner should not wait after every click. Each choice waits in
+        // this browser tab, shown on its row with an Undo, until "Apply
+        // changes" posts them all and the plan is rebuilt once. Nothing is
+        // decided until then, so Scan, Identify, the dry run and the live
+        // commit wait until the changes are applied or discarded. The server
+        // checks every change again; this list only collects them.
+        // =====================================================
+        const pendingStorageKey = "pim.pendingChanges";
+        const pendingForm = document.getElementById("pendingChangesForm");
+        const pendingText = document.getElementById("pendingChangesText");
+        const pendingChanges = new Map();
+
+        function decisionFormFor(kind, movieId) {
+            const input = document.querySelector(
+                `#movies-pane form[data-decision="${kind}"] input[name="movieId"][value="${movieId}"]`);
+            return input ? input.form : null;
+        }
+
+        function movieRowFor(movieId) {
+            return document.querySelector(`.movie-results-row[data-movie-id="${movieId}"]`);
+        }
+
+        function describeChange(change) {
+            return change.kind === "imdb"
+                ? `Use IMDb ID ${change.value}`
+                : change.label;
+        }
+
+        function savePendingChanges() {
+            writeStoredValue(
+                pendingStorageKey,
+                pendingChanges.size === 0
+                    ? null
+                    : JSON.stringify(Array.from(pendingChanges.values())));
+        }
+
+        function showPendingChange(movieId) {
+            const row = movieRowFor(movieId);
+
+            if (!row) {
+                return;
+            }
+
+            const change = pendingChanges.get(movieId);
+            const note = row.querySelector(".pending-change");
+
+            row.classList.toggle("has-pending-change", Boolean(change));
+            row.querySelector(".row-actions")?.classList.toggle("d-none", Boolean(change));
+
+            if (note) {
+                note.hidden = !change;
+                note.querySelector(".pending-change-text").textContent =
+                    change ? `Waiting: ${describeChange(change)}` : "";
+            }
+        }
+
+        function refreshPendingBar(note) {
+            if (!pendingForm) {
+                return;
+            }
+
+            const count = pendingChanges.size;
+            pendingForm.hidden = count === 0;
+            pendingText.textContent = note ??
+                `${count} change${count === 1 ? "" : "s"} waiting. Nothing changes until you apply ${count === 1 ? "it" : "them"}.`;
+        }
+
+        // One waiting change per movie: a later choice replaces an earlier one.
+        function queueChange(movieId, kind, label, value) {
+            if (!movieId || !kind) {
+                return;
+            }
+
+            pendingChanges.set(movieId, { movieId: movieId, kind: kind, label: label, value: value ?? null });
+            showPendingChange(movieId);
+            savePendingChanges();
+            refreshPendingBar();
+        }
+
+        function unqueueChange(movieId) {
+            pendingChanges.delete(movieId);
+            showPendingChange(movieId);
+            savePendingChanges();
+            refreshPendingBar();
+        }
+
+        document.querySelectorAll("[data-undo-change]").forEach(function (button) {
+            button.addEventListener("click", function () {
+                unqueueChange(button.closest("tr").dataset.movieId);
+            });
+        });
+
+        document.getElementById("pendingChangesDiscard")?.addEventListener("click", function () {
+            Array.from(pendingChanges.keys()).forEach(unqueueChange);
+        });
+
+        // Rebuild the hidden fields from the list just before posting.
+        pendingForm?.addEventListener("submit", function () {
+            pendingForm.querySelectorAll("[data-change-field]").forEach(function (field) {
+                field.remove();
+            });
+
+            Array.from(pendingChanges.values()).forEach(function (change, index) {
+                [["MovieId", change.movieId], ["Kind", change.kind], ["Value", change.value ?? ""]]
+                    .forEach(function ([name, value]) {
+                        const field = document.createElement("input");
+                        field.type = "hidden";
+                        field.name = `decisions[${index}].${name}`;
+                        field.value = value;
+                        field.dataset.changeField = "true";
+                        pendingForm.appendChild(field);
+                    });
+            });
+
+            writeStoredValue(pendingStorageKey, null);
+            document.getElementById("pendingChangesApply").disabled = true;
+            document.getElementById("pendingChangesDiscard").disabled = true;
+            showApplyProgress(pendingText);
+        });
+
+        // The workflow buttons would act on the plan without the waiting
+        // changes, so they wait. Capturing at the document runs this before
+        // the buttons' own handlers.
+        document.addEventListener("click", function (event) {
+            const button = event.target.closest(
+                "#scanBtn, #enrichBtn, #dryRunButton, #liveCommitButton");
+
+            if (!button || pendingChanges.size === 0) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            refreshPendingBar(
+                `${pendingChanges.size} change${pendingChanges.size === 1 ? "" : "s"} waiting. ` +
+                "Apply or discard them first.");
+        }, true);
+
+        // Bring back changes made before a reload in this tab, as long as the
+        // row still offers that choice.
+        try {
+            JSON.parse(readStoredValue(pendingStorageKey) ?? "[]").forEach(function (change) {
+                if (change && decisionFormFor(change.kind, change.movieId)) {
+                    pendingChanges.set(change.movieId, change);
+                    showPendingChange(change.movieId);
+                }
+            });
+        } catch {
+            // A damaged list is dropped; nothing was applied from it.
+        }
+
+        savePendingChanges();
+        refreshPendingBar();
+
+        // A row choice joins the waiting changes instead of posting. Other
+        // forms (Apply changes) post, and the page then returns to the same
+        // place with the same details open.
         document.querySelectorAll("#movies-pane form").forEach(function (form) {
             form.addEventListener("submit", function (event) {
                 const needsConfirmation =
@@ -1639,7 +1837,31 @@
                 delete form.dataset.confirmed;
 
                 if (form === bulkForm) {
-                    showBulkProgress();
+                    event.preventDefault();
+                    const keep = event.submitter?.id === "bulkKeepButton";
+
+                    tickedMovieBoxes().forEach(function (box) {
+                        queueChange(
+                            box.value,
+                            keep ? "keepName" : "accept",
+                            keep ? "Keep file's name" : "Accept match");
+                        box.checked = false;
+                    });
+
+                    refreshBulkSelection();
+                    return;
+                }
+
+                if (form.dataset.decision) {
+                    event.preventDefault();
+                    const value = form.querySelector('input[name="imdbId"]')?.value.trim();
+
+                    queueChange(
+                        form.querySelector('input[name="movieId"]')?.value,
+                        form.dataset.decision,
+                        form.querySelector('button[type="submit"]')?.textContent.trim(),
+                        value);
+                    return;
                 }
 
                 const openDetails = Array.from(
@@ -1653,7 +1875,7 @@
         });
 
         if (movieRows.length > 0) {
-            // Open on "Your decision" when there is anything to decide, unless
+            // Open on "Needs Review" when there is anything to decide, unless
             // the owner picked a view earlier in this browser tab.
             const defaultFilter = movieFilterContainer?.dataset.defaultFilter ?? "all";
             let initialFilter = readStoredValue(movieFilterStorageKey) ?? defaultFilter;
