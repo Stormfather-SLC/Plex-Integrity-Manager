@@ -54,7 +54,7 @@ public sealed class MovieResultRow
 
     public string StateLabel => State switch
     {
-        MovieResultState.Decide => "Your decision",
+        MovieResultState.Decide => "Needs Review",
         MovieResultState.Blocked => "Blocked",
         MovieResultState.Error => "Error",
         MovieResultState.Pending => "Not identified",

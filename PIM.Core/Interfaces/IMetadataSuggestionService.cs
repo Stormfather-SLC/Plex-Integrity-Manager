@@ -24,6 +24,8 @@ public interface IMetadataSuggestionService
     /// title and year parsed from the file; when they disagree the movie stays
     /// in review with the ID's real identity offered as a suggestion.
     /// Returns false, changing nothing, when the movie is not eligible.
+    /// Pass <paramref name="rebuildPlan"/> = false when applying several
+    /// decisions and rebuild once at the end.
     /// </summary>
     Task<bool> ApplyImdbIdAsync(
         Movie movie,
@@ -31,7 +33,8 @@ public interface IMetadataSuggestionService
         List<Movie> allMovies,
         DestinationProfile profile,
         string sourceRoot,
-        LibraryGoal libraryGoal);
+        LibraryGoal libraryGoal,
+        bool rebuildPlan = true);
 
     /// <summary>
     /// Records the owner's decision to keep the title and year from the file
@@ -52,12 +55,15 @@ public interface IMetadataSuggestionService
     /// <summary>
     /// Withdraws that decision: the ID is looked up again without it, so the
     /// difference from OMDb returns to the owner as a decision. Returns false,
-    /// changing nothing, when there is no such decision to undo.
+    /// changing nothing, when there is no such decision to undo. Pass
+    /// <paramref name="rebuildPlan"/> = false when applying several decisions
+    /// and rebuild once at the end.
     /// </summary>
     Task<bool> UndoKeepFileIdentityAsync(
         Movie movie,
         List<Movie> allMovies,
         DestinationProfile profile,
         string sourceRoot,
-        LibraryGoal libraryGoal);
+        LibraryGoal libraryGoal,
+        bool rebuildPlan = true);
 }

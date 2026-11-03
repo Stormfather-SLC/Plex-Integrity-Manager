@@ -822,6 +822,215 @@ namespace PIM.Web.Pages
             });
         }
 
+        public Task<IActionResult> OnPostApplyDecisionsAsync(List<QueuedDecision>? decisions) =>
+            RunExclusiveAsync(DecisionAction, () => ApplyDecisionsAsync(decisions));
+
+        /// <summary>
+        /// Applies the changes the owner lined up in Movie Results, in the
+        /// order they were made, then rebuilds the plan once. Each is checked
+        /// as if it had been made on its own; one that no longer applies is
+        /// left out and reported. A movie with more than one waiting change
+        /// is left unchanged, since the page should never send that.
+        /// </summary>
+        private async Task<IActionResult> ApplyDecisionsAsync(List<QueuedDecision>? decisions)
+        {
+            var queued = (decisions ?? new List<QueuedDecision>())
+                .Where(decision => decision != null)
+                .ToList();
+
+            if (queued.Count == 0)
+            {
+                TempData["Message"] = "No changes were waiting. Nothing was changed.";
+                return RedirectToPage(new
+                {
+                    showOnlyRecommended = ShowOnlyRecommended
+                });
+            }
+
+            InvalidateDryRunApproval();
+
+            if (!TryGetCachedMovies(out var movies))
+            {
+                TempData["Message"] = "The scan is no longer available. Scan the source folder again.";
+                return RedirectToPage();
+            }
+
+            var moviesWithSeveral = queued
+                .GroupBy(decision => decision.MovieId)
+                .Where(group => group.Count() > 1)
+                .Select(group => group.Key)
+                .ToHashSet();
+            var profile = _profileStore.GetActiveProfile();
+            var sourceRoot = _config["PIM:ScanPath"] ?? string.Empty;
+            var libraryGoal = GetConfiguredLibraryGoal();
+            var applied = new List<(QueuedDecision Decision, Movie Movie)>();
+            var leftOut = new List<string>();
+
+            _logger.LogInformation(
+                "User applied {Count} waiting change(s); invalidating prior dry-run approval and rebuilding the plan once.",
+                queued.Count);
+
+            try
+            {
+                BeginStep(1, 2, $"Applying {CountOf(queued.Count, "change")}");
+                _progress.Total = queued.Count;
+                _progress.IsRunning = true;
+
+                foreach (var decision in queued)
+                {
+                    var movie = movies.SingleOrDefault(candidate => candidate.Id == decision.MovieId);
+                    _progress.CurrentFile = movie?.FileName ?? string.Empty;
+
+                    if (movie == null)
+                    {
+                        leftOut.Add($"{decision.Label} for a movie no longer in the scan");
+                    }
+                    else if (moviesWithSeveral.Contains(movie.Id))
+                    {
+                        leftOut.Add($"{decision.Label} for '{movie.FileName}', which had more than one change waiting");
+                    }
+                    else if (await ApplyQueuedDecisionAsync(decision, movie, movies, profile, sourceRoot, libraryGoal))
+                    {
+                        _logger.LogInformation(
+                            "Applied waiting change {Change} to {FileName}{Value}.",
+                            decision.Label,
+                            movie.FileName ?? "<unknown>",
+                            decision.Kind == QueuedDecision.ImdbId ? $" ({movie.ImdbId})" : string.Empty);
+                        applied.Add((decision, movie));
+                    }
+                    else
+                    {
+                        _logger.LogInformation(
+                            "Left out waiting change {Change} for {FileName}: it no longer applies.",
+                            decision.Label,
+                            movie.FileName ?? "<unknown>");
+                        leftOut.Add($"{decision.Label} for '{movie.FileName}', which no longer applies");
+                    }
+
+                    _progress.Processed++;
+                }
+
+                if (applied.Count > 0)
+                {
+                    BeginStep(2, 2, "Checking duplicates, the destination folder and Plex");
+                    _moviePlan.Rebuild(
+                        movies,
+                        profile,
+                        sourceRoot,
+                        libraryGoal);
+                    SetCachedMovies(movies);
+                }
+            }
+            finally
+            {
+                ResetProgress(isRunning: false);
+            }
+
+            TempData["Message"] = DescribeAppliedDecisions(queued.Count, applied, leftOut);
+
+            return RedirectToPage(new
+            {
+                showOnlyRecommended = ShowOnlyRecommended
+            });
+        }
+
+        /// <summary>
+        /// Makes one waiting change without rebuilding the plan. Returns
+        /// false, changing nothing, when the change no longer applies.
+        /// </summary>
+        private async Task<bool> ApplyQueuedDecisionAsync(
+            QueuedDecision decision,
+            Movie movie,
+            List<Movie> movies,
+            DestinationProfile profile,
+            string sourceRoot,
+            LibraryGoal libraryGoal)
+        {
+            switch (decision.Kind)
+            {
+                case QueuedDecision.AcceptMatch:
+                    return await _metadataSuggestion.AcceptAsync(
+                        movie, movies, profile, sourceRoot, libraryGoal, rebuildPlan: false);
+
+                case QueuedDecision.KeepFileName:
+                    return await _metadataSuggestion.KeepFileIdentityAsync(
+                        movie, movies, profile, sourceRoot, libraryGoal, rebuildPlan: false);
+
+                case QueuedDecision.UndoKeepFileName:
+                    return await _metadataSuggestion.UndoKeepFileIdentityAsync(
+                        movie, movies, profile, sourceRoot, libraryGoal, rebuildPlan: false);
+
+                case QueuedDecision.ImdbId:
+                    return ImdbIdInput.TryNormalize(decision.Value, out var imdbId) &&
+                           await _metadataSuggestion.ApplyImdbIdAsync(
+                               movie, imdbId, movies, profile, sourceRoot, libraryGoal, rebuildPlan: false);
+
+                case QueuedDecision.AddPlexDuplicate:
+                    return TryApplyPlexDuplicateDecision(movie, addAnyway: true);
+
+                case QueuedDecision.UndoPlexDuplicate:
+                    return TryApplyPlexDuplicateDecision(movie, addAnyway: false);
+
+                case QueuedDecision.ConfirmFileName:
+                    return TryConfirmFileName(movie);
+
+                case QueuedDecision.KeepDuplicateCopy:
+                    return _duplicates.ChoosePreferredCopy(movie, movies);
+
+                default:
+                    return false;
+            }
+        }
+
+        private static string DescribeAppliedDecisions(
+            int queuedCount,
+            List<(QueuedDecision Decision, Movie Movie)> applied,
+            List<string> leftOut)
+        {
+            if (applied.Count == 0)
+            {
+                return $"None of the {CountOf(queuedCount, "waiting change")} could be applied, so no movie was changed: " +
+                       string.Join("; ", leftOut) + ".";
+            }
+
+            var parts = new List<string>
+            {
+                $"Applied {CountOf(applied.Count, "change")}."
+            };
+
+            // A typed IMDb ID is a question as much as a decision: say what it found.
+            foreach (var (_, movie) in applied.Where(item => item.Decision.Kind == QueuedDecision.ImdbId))
+            {
+                parts.Add(movie.NeedsReview || movie.HasError
+                    ? $"{movie.ImdbId} was looked up for '{movie.FileName}', but it still needs review: {movie.ReviewReason ?? movie.ErrorMessage ?? movie.Status}."
+                    : $"{movie.ImdbId} identified '{movie.FileName}' as {movie.Title} ({movie.Year}).");
+            }
+
+            var stillBlocked = applied
+                .Where(item => item.Decision.Kind != QueuedDecision.ImdbId &&
+                               (item.Movie.NeedsReview || item.Movie.HasError))
+                .Select(item => $"'{item.Movie.FileName}'")
+                .Distinct()
+                .ToList();
+
+            if (stillBlocked.Count > 0)
+            {
+                parts.Add(
+                    $"{CountOf(stillBlocked.Count, "movie")} still {(stillBlocked.Count == 1 ? "needs" : "need")} attention: " +
+                    string.Join(", ", stillBlocked.Take(5)) +
+                    (stillBlocked.Count > 5 ? $" and {stillBlocked.Count - 5:N0} more" : string.Empty) + ".");
+            }
+
+            if (leftOut.Count > 0)
+            {
+                parts.Add($"Left out: {string.Join("; ", leftOut)}.");
+            }
+
+            parts.Add("Run a new dry run before live commit.");
+
+            return string.Join(" ", parts);
+        }
+
         public Task<IActionResult> OnPostUndoKeepFileIdentityAsync(Guid movieId) =>
             RunExclusiveAsync(DecisionAction, () => UndoKeepFileIdentityAsync(movieId));
 
@@ -905,13 +1114,8 @@ namespace PIM.Web.Pages
             }
 
             var movie = movies.SingleOrDefault(candidate => candidate.Id == movieId);
-            var eligible = movie != null &&
-                           (addAnyway
-                               ? movie.NeedsPlexDuplicateDecision &&
-                                 !string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath)
-                               : !string.IsNullOrWhiteSpace(movie.PlexDuplicateAcceptedPath));
 
-            if (!eligible)
+            if (movie == null || !CanApplyPlexDuplicateDecision(movie, addAnyway))
             {
                 TempData["Message"] = addAnyway
                     ? "That file is no longer waiting for a possible-duplicate decision. Nothing was changed."
@@ -926,13 +1130,10 @@ namespace PIM.Web.Pages
                 addAnyway
                     ? "User chose to add {FileName} alongside the existing Plex copy at {PlexPath}; invalidating prior dry-run approval and rebuilding the plan."
                     : "User undid the decision to add {FileName} alongside the existing Plex copy at {PlexPath}; invalidating prior dry-run approval and rebuilding the plan.",
-                movie!.FileName ?? "<unknown>",
+                movie.FileName ?? "<unknown>",
                 addAnyway ? movie.ExistingPlexLibraryPath : movie.PlexDuplicateAcceptedPath);
 
-            movie.PlexDuplicateAcceptedPath = addAnyway
-                ? movie.ExistingPlexLibraryPath
-                : null;
-            movie.ApprovedForCommit = false;
+            TryApplyPlexDuplicateDecision(movie, addAnyway);
 
             _moviePlan.Rebuild(
                 movies,
@@ -951,6 +1152,45 @@ namespace PIM.Web.Pages
             {
                 showOnlyRecommended = ShowOnlyRecommended
             });
+        }
+
+        private static bool CanApplyPlexDuplicateDecision(Movie movie, bool addAnyway) =>
+            addAnyway
+                ? movie.NeedsPlexDuplicateDecision &&
+                  !string.IsNullOrWhiteSpace(movie.ExistingPlexLibraryPath)
+                : !string.IsNullOrWhiteSpace(movie.PlexDuplicateAcceptedPath);
+
+        /// <summary>
+        /// Adds the file alongside the Plex copy (or undoes that) without
+        /// rebuilding the plan. Returns false, changing nothing, when the
+        /// movie is not waiting for that decision.
+        /// </summary>
+        private static bool TryApplyPlexDuplicateDecision(Movie movie, bool addAnyway)
+        {
+            if (!CanApplyPlexDuplicateDecision(movie, addAnyway))
+                return false;
+
+            movie.PlexDuplicateAcceptedPath = addAnyway
+                ? movie.ExistingPlexLibraryPath
+                : null;
+            movie.ApprovedForCommit = false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Confirms an unusually long file name without rebuilding the plan.
+        /// Returns false, changing nothing, when it needs no confirmation.
+        /// </summary>
+        private static bool TryConfirmFileName(Movie movie)
+        {
+            if (!movie.HasSuspiciousFileNameReview)
+                return false;
+
+            movie.FileNameConfirmed = true;
+            movie.ApprovedForCommit = false;
+
+            return true;
         }
 
         public IActionResult OnPostConfirmFileName(Guid movieId) =>
@@ -982,8 +1222,7 @@ namespace PIM.Web.Pages
                 "User confirmed the unusually long file name of {FileName}; invalidating prior dry-run approval and rebuilding the plan.",
                 movie.FileName ?? "<unknown>");
 
-            movie.FileNameConfirmed = true;
-            movie.ApprovedForCommit = false;
+            TryConfirmFileName(movie);
 
             _moviePlan.Rebuild(
                 movies,
