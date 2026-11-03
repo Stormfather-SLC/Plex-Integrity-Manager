@@ -265,6 +265,26 @@
         overflow-y: auto;
     }
 
+    .movie-results-row {
+        cursor: pointer;
+    }
+
+    .movie-results-row:focus-visible {
+        outline: 2px solid #0d6efd;
+        outline-offset: -2px;
+    }
+
+    .movie-results-row .details-caret::before {
+        content: "\25B8";
+        display: inline-block;
+        width: 1em;
+        color: #6c757d;
+    }
+
+    .movie-results-row[aria-expanded="true"] .details-caret::before {
+        content: "\25BE";
+    }
+
     .movie-results .movie-details-row > td {
         background-color: #f8f9fa;
         border-top: 0;
@@ -700,7 +720,11 @@
                             <tr class="movie-results-row"
                                 id="@rowId"
                                 data-movie-category="@row.FilterKey"
-                                data-details-id="@detailsId">
+                                data-details-id="@detailsId"
+                                data-toggle-details="@detailsId"
+                                tabindex="0"
+                                aria-expanded="false"
+                                aria-controls="@detailsId">
                                 <td class="text-nowrap">
                                     @if (row.State == MovieResultState.Decide)
                                     {
@@ -717,6 +741,7 @@
                                 </td>
                                 <td class="text-cell">
                                     <div class="fw-bold">
+                                        <span class="details-caret" aria-hidden="true"></span>
                                         @row.DisplayTitle
                                         @if (movie.Year.HasValue && !string.IsNullOrWhiteSpace(movie.Title))
                                         {
@@ -740,7 +765,7 @@
                                     @if (row.AdditionalReasonCount > 0)
                                     {
                                         <div class="small text-muted">
-                                            +@row.AdditionalReasonCount more @(row.AdditionalReasonCount == 1 ? "reason" : "reasons") in Details
+                                            +@row.AdditionalReasonCount more @(row.AdditionalReasonCount == 1 ? "reason" : "reasons") in details
                                         </div>
                                     }
                                     else if (row.State == MovieResultState.Ready && row.TargetDisplay != null)
@@ -862,13 +887,6 @@
                                                 Enter IMDb ID
                                             </button>
                                         }
-                                        <button type="button"
-                                                class="btn btn-sm btn-outline-secondary"
-                                                data-toggle-details="@detailsId"
-                                                aria-expanded="false"
-                                                aria-controls="@detailsId">
-                                            Details
-                                        </button>
                                     </div>
                                 </td>
                             </tr>
@@ -1260,7 +1278,6 @@
 
             details.hidden = !open;
             toggle.setAttribute("aria-expanded", open.toString());
-            toggle.textContent = open ? "Hide details" : "Details";
         }
 
         function countRows(filter) {
@@ -1332,11 +1349,30 @@
                 applyMovieFilter(null);
             });
 
+        // The whole row shows or hides its details. Buttons, tick boxes and
+        // links in the row keep their own job, and selecting text to copy a
+        // path does not toggle.
         document.querySelectorAll("[data-toggle-details]").forEach(function (toggle) {
-            toggle.addEventListener("click", function () {
+            const flip = function () {
                 setDetailsOpen(
                     toggle,
                     toggle.getAttribute("aria-expanded") !== "true");
+            };
+
+            toggle.addEventListener("click", function (event) {
+                if (event.target.closest("button, a, input, select, textarea, label, form") ||
+                    window.getSelection()?.toString()) {
+                    return;
+                }
+
+                flip();
+            });
+
+            toggle.addEventListener("keydown", function (event) {
+                if (event.target === toggle && (event.key === "Enter" || event.key === " ")) {
+                    event.preventDefault();
+                    flip();
+                }
             });
         });
 
