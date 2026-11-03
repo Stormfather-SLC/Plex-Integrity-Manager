@@ -236,6 +236,25 @@
         max-width: 80ch;
     }
 
+    /* Text cells shrink to the window and truncate, instead of widening
+       the table past it. Action buttons wrap when the window is narrow. */
+    .movie-results .text-cell,
+    .dry-run-preview .text-cell {
+        max-width: 0;
+        width: 50%;
+    }
+
+    @@media (max-width: 1399.98px) {
+        .movie-results .actions-cell {
+            white-space: normal;
+            min-width: 15rem;
+        }
+
+        .movie-results .actions-cell > div {
+            flex-wrap: wrap;
+        }
+    }
+
     .dry-run-filter-card {
         min-width: 9rem;
     }
@@ -438,13 +457,13 @@
                                 <td>
                                     <span class="badge @row.BadgeClass">@row.BadgeLabel</span>
                                 </td>
-                                <td>
+                                <td class="text-cell">
                                     <div class="fw-bold">@row.DisplayTitle</div>
                                     <div class="small text-muted text-truncate path-line" title="@row.Item.OriginalFilePath">
                                         @row.SourceDisplay
                                     </div>
                                 </td>
-                                <td>
+                                <td class="text-cell">
                                     @if (row.TargetDisplay != null)
                                     {
                                         <div class="text-truncate path-line" title="@row.Item.TargetPath">→ @row.TargetDisplay</div>
@@ -696,7 +715,7 @@
                                     }
                                     <span class="badge @row.BadgeClass">@row.StateLabel</span>
                                 </td>
-                                <td>
+                                <td class="text-cell">
                                     <div class="fw-bold">
                                         @row.DisplayTitle
                                         @if (movie.Year.HasValue && !string.IsNullOrWhiteSpace(movie.Title))
@@ -716,7 +735,7 @@
                                         @row.SourceDisplay
                                     </div>
                                 </td>
-                                <td>
+                                <td class="text-cell">
                                     <div class="text-truncate summary-line" title="@row.Summary">@row.Summary</div>
                                     @if (row.AdditionalReasonCount > 0)
                                     {
@@ -731,7 +750,7 @@
                                         </div>
                                     }
                                 </td>
-                                <td class="text-nowrap">
+                                <td class="text-nowrap actions-cell">
                                     <div class="d-flex gap-1 justify-content-end">
                                         @if (row.CanAddPlexDuplicate)
                                         {
