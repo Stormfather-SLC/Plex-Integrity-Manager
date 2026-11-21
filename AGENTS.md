@@ -15,7 +15,7 @@ Preserve existing behavior unless the task explicitly changes it. Investigate th
 - `PIM.Application/`: currently a thin placeholder project; do not assume application orchestration lives here.
 - `PIM.Tests/`: xUnit tests for path building, parsing, OMDb responses, Plex/destination conflicts, and rename/source-cleanup safety. HTTP tests use stubs and file-operation tests use isolated temporary directories.
 - `.github/workflows/build.yml`: Windows CI that builds the solution and runs `PIM.Tests` on pull requests and on pushes to `main`, `feature/**`, `feat/**`, `fix/**`, `chore/**`, and `integration/**`.
-- `Start-PIM.ps1`: owner convenience script that runs `git pull`, builds, and starts PIM. Codex must not run it without explicit approval because it changes repository state through `git pull`.
+- `Start-PIM.ps1`: owner convenience script that runs `git pull`, builds, and starts PIM. Codex must not run it without explicit approval because it changes repository state through `git pull`. `Start-PIM.cmd` is the owner's double-click launcher for it (it also opens the browser, or just opens it when PIM is already running) and falls under the same rule.
 
 ## Current architecture and behavior
 
