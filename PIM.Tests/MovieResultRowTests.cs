@@ -272,7 +272,7 @@ public sealed class MovieResultRowTests
         var row = Row(movie);
 
         Assert.Equal(MovieResultState.Pending, row.State);
-        Assert.Contains("Identify Movies", row.Summary);
+        Assert.Contains("Identify Again", row.Summary);
     }
 
     [Fact]
@@ -335,7 +335,7 @@ public sealed class MovieResultRowTests
 
         Assert.Equal(MovieResultState.Decide, row.State);
         Assert.Equal(
-            "OMDb lookup failed: no answer; run Identify Movies to try again",
+            "OMDb lookup failed: no answer; use Identify Again to try again",
             row.Summary);
     }
 

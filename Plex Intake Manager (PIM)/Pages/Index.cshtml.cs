@@ -184,6 +184,7 @@ namespace PIM.Web.Pages
                 processed = _progress.Processed,
                 currentFile = _progress.CurrentFile,
                 isRunning = _progress.IsRunning,
+                scanSucceeded = _progress.LastScanSucceeded,
                 canCancel = _progress.CanCancel,
                 cancelRequested = _progress.CancelRequested,
                 step = _progress.Step,
@@ -315,6 +316,7 @@ namespace PIM.Web.Pages
 
             ResetProgress();
             _progress.IsRunning = true;
+            _progress.LastScanSucceeded = false;
 
             _logger.LogInformation(
                 "Movie scan started for the configured source with destination exclusion enabled.");
@@ -351,6 +353,7 @@ namespace PIM.Web.Pages
                     }
 
                     _workflowState.SaveMovies(movies, rootPath);
+                    _progress.LastScanSucceeded = true;
                     _logger.LogInformation(
                         "Movie scan completed with {MovieCount} discovered movie file(s).",
                         movies.Count);
@@ -457,9 +460,9 @@ namespace PIM.Web.Pages
             if (lookup.Cancelled)
             {
                 TempData["Message"] =
-                    $"Identify Movies was stopped after {lookup.Completed} of {lookup.Total} lookup(s). " +
+                    $"Identifying was stopped after {lookup.Completed} of {lookup.Total} lookup(s). " +
                     "Finished lookups were saved; movies not looked up yet show as Not identified. " +
-                    "Run Identify Movies again to continue.";
+                    "Use Identify Again to continue.";
             }
 
             return RedirectToPage(new
@@ -1527,7 +1530,7 @@ namespace PIM.Web.Pages
                     (notMoved > 0
                         ? $" {notMoved:N0} could not be moved; see Movie Results."
                         : string.Empty) +
-                    " Run Scan Movies to refresh the list before you continue." +
+                    " Run Scan & Identify to refresh the list before you continue." +
                     (string.IsNullOrWhiteSpace(_rename.LastJournalLocation)
                         ? string.Empty
                         : $" A record of every file operation was saved to {_rename.LastJournalLocation}.");

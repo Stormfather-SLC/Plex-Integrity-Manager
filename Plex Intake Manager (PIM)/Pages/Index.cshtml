@@ -356,16 +356,19 @@
 
     <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
 
-        <!-- Full Scan -->
-        <button type="button" id="scanBtn">
-            🎬 Scan Movies
+        <!-- Full scan, then identification of the movies it found -->
+        <button type="button"
+                id="scanBtn"
+                title="Scan the source folder, then look up every movie found">
+            🎬 Scan &amp; Identify
         </button>
 
-        <!-- Retrieve Metadata -->
+        <!-- Identification only: retries movies not identified yet, without rescanning -->
         <button type="button"
                 id="enrichBtn"
+                title="Look up only the movies that are not identified yet, without scanning again"
                 disabled="@(!Model.Movies.Any())">
-            🔎 Identify Movies
+            🔎 Identify Again
         </button>
 
         <!-- Apply Changes Form -->
@@ -613,7 +616,7 @@
                     (Key: "error", Label: "Errors", Css: "text-danger", Hint: "Could not be processed"),
                     (Key: "ready", Label: "Ready", Css: "text-success", Hint: "Will be moved by a live commit after a dry run"),
                     (Key: "skipped", Label: "Skipped", Css: "text-secondary", Hint: "Duplicate copies left where they are; nothing is deleted"),
-                    (Key: "pending", Label: "Not identified", Css: "text-muted", Hint: "Run Identify Movies")
+                    (Key: "pending", Label: "Not identified", Css: "text-muted", Hint: "Use Identify Again")
                 };
             }
 
@@ -692,7 +695,7 @@
 
             @if (!resultRows.Any())
             {
-                <p class="text-muted">No movies scanned yet. Use <strong>Scan Movies</strong> to begin.</p>
+                <p class="text-muted">No movies scanned yet. Use <strong>Scan &amp; Identify</strong> to begin.</p>
             }
             else
             {
@@ -1242,8 +1245,29 @@
                 dryRunPreviewSection.remove();
             }
 
-            pollProgress("Scan complete!");
+            pollProgress("Scan complete. Identifying movies...", identifyAfterScan);
         });
+    }
+
+    // Scan & Identify: once the scan has saved the new movie list, go
+    // straight on to identifying it (identify-workflow.js owns that step and
+    // reloads the page when it ends). A failed scan saved nothing new, so
+    // nothing is identified and the previous results stay as they were.
+    function identifyAfterScan(progress) {
+        if (progress.scanSucceeded === true && window.pimIdentify) {
+            void window.pimIdentify();
+            return;
+        }
+
+        if (progress.scanSucceeded !== true) {
+            workflowStatus.innerText =
+                "The scan failed, so no movies were identified. The previous scan is unchanged. " +
+                "The application log has the details.";
+            window.pimBusy?.unlock();
+            return;
+        }
+
+        location.reload();
     }
         // =====================================================
         // 🌐 RETRIEVE METADATA
@@ -2014,7 +2038,7 @@
         // =====================================================
         // 📊 PROGRESS POLLING
         // =====================================================
-        function pollProgress(completionMessage) {
+        function pollProgress(completionMessage, onComplete) {
 
             const startTime = Date.now();
 
@@ -2067,6 +2091,12 @@
                 if (!data.busy) {
                     clearInterval(interval);
                     workflowStatus.innerHTML = completionMessage;
+
+                    if (onComplete) {
+                        onComplete(data);
+                        return;
+                    }
+
                     location.reload();
                 }
 

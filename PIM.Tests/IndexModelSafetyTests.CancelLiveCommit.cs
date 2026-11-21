@@ -89,7 +89,7 @@ public sealed partial class IndexModelSafetyTests
         Assert.Equal(
             "Live commit stopped. 1 of 3 approved files was moved and stays moved. " +
             "2 were not reached and are still where they were. " +
-            "Run Scan Movies to refresh the list before you continue.",
+            "Run Scan & Identify to refresh the list before you continue.",
             live.TempData["Message"]?.ToString());
         Assert.Null(store.GetDryRunApproval());
         Assert.False(progress.CanCancel);
