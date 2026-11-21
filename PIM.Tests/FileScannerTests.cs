@@ -81,6 +81,42 @@ public sealed class FileScannerTests
         }
     }
 
+    [Fact]
+    public void GetFiles_MissingSourceFolder_Throws_InsteadOfReturningNoFiles()
+    {
+        var testRoot = CreateTestRoot();
+
+        try
+        {
+            var scanner = new FileScanner(new FileNameParser());
+
+            Assert.Throws<DirectoryNotFoundException>(() =>
+                scanner.GetFiles(Path.Combine(testRoot, "Renamed Or Disconnected")));
+            Assert.Throws<DirectoryNotFoundException>(() => scanner.GetFiles("   "));
+        }
+        finally
+        {
+            DeleteTestRoot(testRoot);
+        }
+    }
+
+    [Fact]
+    public void GetFiles_ExistingEmptySourceFolder_ReturnsNoFiles()
+    {
+        var testRoot = CreateTestRoot();
+
+        try
+        {
+            var scanner = new FileScanner(new FileNameParser());
+
+            Assert.Empty(scanner.GetFiles(testRoot));
+        }
+        finally
+        {
+            DeleteTestRoot(testRoot);
+        }
+    }
+
     private static string CreateTestRoot()
     {
         var path = Path.Combine(
