@@ -534,9 +534,14 @@ namespace PIM.Infrastructure.Services
                     var cleanupResult = RemoveEmptyCommittedSourceFolders(
                         _configuration["PIM:ScanPath"] ?? string.Empty,
                         committedSourceDirectories,
+                        movies.Concat(notApproved),
                         removedFolder => RecordBestEffort(new OperationJournalEntry(
                             OperationJournalEvent.SourceFolderRemoved,
-                            SourcePath: removedFolder)));
+                            SourcePath: removedFolder)),
+                        (keptFolder, reason) => RecordBestEffort(new OperationJournalEntry(
+                            OperationJournalEvent.SourceFolderKept,
+                            SourcePath: keptFolder,
+                            Detail: reason)));
 
                     _sourceCleanupStatus.Complete(
                         cleanupResult.EmptyFoldersRemoved,
@@ -587,7 +592,9 @@ namespace PIM.Infrastructure.Services
         private static SourceCleanupResult RemoveEmptyCommittedSourceFolders(
             string sourceRoot,
             IEnumerable<string> committedSourceDirectories,
-            Action<string>? onFolderRemoved = null)
+            IEnumerable<Movie> scannedMovies,
+            Action<string>? onFolderRemoved = null,
+            Action<string, string>? onFolderKept = null)
         {
             var removedCount = 0;
             var protectedCount = 0;
@@ -683,6 +690,10 @@ namespace PIM.Infrastructure.Services
                 .ThenByDescending(path => path.Length)
                 .ToList();
 
+            var loneMovieFolders = FindLoneMovieFolders(
+                normalizedSourceRoot,
+                scannedMovies);
+
             foreach (var directory in orderedCandidates)
             {
                 FileAttributes attributes;
@@ -723,13 +734,19 @@ namespace PIM.Infrastructure.Services
                     // The configured source root is never added as a candidate. Its
                     // immediate children are also protected so organizational folders
                     // such as G, PG, PG-13, R, genre, or alphabet groups remain intact.
+                    // The exception is a movie's own folder: one that held only the
+                    // movie just moved and is named for it.
                     if (IsImmediateChildOfRoot(
                             normalizedSourceRoot,
-                            directory))
+                            directory) &&
+                        !loneMovieFolders.Contains(directory))
                     {
                         protectedCount++;
                         Console.WriteLine(
                             $"[PIM] Preserved top-level source folder: {directory}");
+                        onFolderKept?.Invoke(
+                            directory,
+                            "Kept: it is directly inside the scan folder and is not a single movie's own folder, so it is treated as an organizing folder.");
                         continue;
                     }
 
@@ -738,6 +755,9 @@ namespace PIM.Infrastructure.Services
                         protectedCount++;
                         Console.WriteLine(
                             $"[PIM] Preserved source reparse point: {directory}");
+                        onFolderKept?.Invoke(
+                            directory,
+                            "Kept: it is a link to another location, which cleanup never removes.");
                         continue;
                     }
 
@@ -751,6 +771,12 @@ namespace PIM.Infrastructure.Services
                         nonEmptyCount++;
                         Console.WriteLine(
                             $"[PIM] Preserved non-empty source folder: {directory}");
+                        onFolderKept?.Invoke(
+                            directory,
+                            $"Kept: it still contains {remainingEntries.Length} " +
+                            (remainingEntries.Length == 1 ? "file or folder" : "files or folders") +
+                            ", such as " +
+                            $"'{Path.GetFileName(remainingEntries.OrderBy(entry => entry, StringComparer.OrdinalIgnoreCase).First())}'.");
                         continue;
                     }
 
@@ -778,6 +804,98 @@ namespace PIM.Infrastructure.Services
                 protectedCount,
                 nonEmptyCount,
                 failedCount);
+        }
+
+        /// <summary>
+        /// Folders directly inside the scan folder that are one movie's own
+        /// folder, such as <c>Scan\Movie (1995)\Movie.mkv</c>: the scan found
+        /// exactly one movie anywhere in the folder, its file sat directly in
+        /// it, it was moved, and the folder's name carries the movie's IMDb ID
+        /// or year (one either way, because the matched year can differ from
+        /// the file's). Every other folder directly inside the scan folder,
+        /// such as PG or Amazon, stays protected. Cleanup still removes only a
+        /// folder that is completely empty.
+        /// </summary>
+        private static HashSet<string> FindLoneMovieFolders(
+            string normalizedSourceRoot,
+            IEnumerable<Movie> scannedMovies)
+        {
+            var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var moviesByTopLevelFolder = new Dictionary<string, List<(Movie Movie, string Directory)>>(
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var movie in scannedMovies)
+            {
+                if (string.IsNullOrWhiteSpace(movie.OriginalFilePath))
+                    continue;
+
+                string directory;
+
+                try
+                {
+                    directory = NormalizeDirectoryPath(
+                        Path.GetDirectoryName(movie.OriginalFilePath) ?? string.Empty);
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+
+                var relativePath = Path.GetRelativePath(normalizedSourceRoot, directory);
+
+                if (relativePath == "." ||
+                    relativePath.StartsWith("..", StringComparison.Ordinal) ||
+                    Path.IsPathRooted(relativePath))
+                {
+                    continue;
+                }
+
+                var topLevelName = relativePath.Split(
+                    new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                    StringSplitOptions.RemoveEmptyEntries)[0];
+                var topLevelFolder = Path.Combine(normalizedSourceRoot, topLevelName);
+
+                if (!moviesByTopLevelFolder.TryGetValue(topLevelFolder, out var moviesInFolder))
+                {
+                    moviesInFolder = new List<(Movie Movie, string Directory)>();
+                    moviesByTopLevelFolder[topLevelFolder] = moviesInFolder;
+                }
+
+                moviesInFolder.Add((movie, directory));
+            }
+
+            foreach (var (topLevelFolder, moviesInFolder) in moviesByTopLevelFolder)
+            {
+                if (moviesInFolder.Count != 1)
+                    continue;
+
+                var (movie, directory) = moviesInFolder[0];
+
+                if (movie.Status == "Committed" &&
+                    string.Equals(directory, topLevelFolder, StringComparison.OrdinalIgnoreCase) &&
+                    IsNamedForMovie(Path.GetFileName(topLevelFolder), movie))
+                {
+                    folders.Add(topLevelFolder);
+                }
+            }
+
+            return folders;
+        }
+
+        private static bool IsNamedForMovie(string folderName, Movie movie)
+        {
+            if (!string.IsNullOrWhiteSpace(movie.ImdbId) &&
+                folderName.Contains(movie.ImdbId, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!movie.Year.HasValue)
+                return false;
+
+            return System.Text.RegularExpressions.Regex
+                .Matches(folderName, @"(?<!\d)(?:18|19|20)\d{2}(?!\d)")
+                .Any(match => Math.Abs(int.Parse(match.Value) - movie.Year.Value) <= 1);
         }
 
         private static bool IsImmediateChildOfRoot(

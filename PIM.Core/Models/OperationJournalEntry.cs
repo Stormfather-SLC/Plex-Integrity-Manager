@@ -17,7 +17,13 @@ public enum OperationJournalEvent
     /// <summary>
     /// The owner stopped the run before every approved file was handled.
     /// </summary>
-    RunStopped
+    RunStopped,
+
+    /// <summary>
+    /// Source cleanup left a folder a moved file came from in place; the
+    /// detail says why.
+    /// </summary>
+    SourceFolderKept
 }
 
 /// <summary>One line in the operation journal.</summary>
