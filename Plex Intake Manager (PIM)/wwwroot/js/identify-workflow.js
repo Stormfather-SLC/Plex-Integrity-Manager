@@ -145,12 +145,8 @@
             }, 1000);
         }
 
-        // Own the Identify click in the capture phase so the legacy inline handler
-        // cannot start a second progress poll that may reload stale scan results.
-        enrichButton.addEventListener("click", async function (event) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-
+        // Identify Again, and the second half of Scan & Identify.
+        const identifyMovies = async function () {
             if (enrichButton.dataset.pimIdentifying === "true") {
                 return;
             }
@@ -328,6 +324,17 @@
                 enrichButton.dataset.pimIdentifying = "false";
                 console.error("PIM identify request failed.", error);
             }
+        };
+
+        // Own the Identify click in the capture phase so the legacy inline handler
+        // cannot start a second progress poll that may reload stale scan results.
+        enrichButton.addEventListener("click", function (event) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            void identifyMovies();
         }, true);
+
+        // Scan & Identify continues here once its scan has finished.
+        window.pimIdentify = identifyMovies;
     });
 })();

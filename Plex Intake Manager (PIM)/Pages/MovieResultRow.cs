@@ -355,7 +355,7 @@ public sealed class MovieResultRow
 
                     // A dry run does not repeat lookups, so say how to.
                     return IsRetryableLookupFailure(movie)
-                        ? $"{identityReason}; run Identify Movies to try again"
+                        ? $"{identityReason}; use Identify Again to try again"
                         : identityReason;
                 }
 
@@ -393,7 +393,7 @@ public sealed class MovieResultRow
                 return "Another copy is kept; this one stays where it is (not deleted)";
 
             default:
-                return "Not identified yet; run Identify Movies";
+                return "Not identified yet; use Identify Again";
         }
     }
 

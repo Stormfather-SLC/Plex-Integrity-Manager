@@ -29,6 +29,14 @@ namespace PIM.Core.Models
         public bool IsRunning { get; set; }
 
         /// <summary>
+        /// True once the most recent scan saved its new movie list; false while
+        /// a scan runs and after one fails. Scan &amp; Identify goes on to
+        /// identify the movies only after a scan that succeeded, because a
+        /// failed scan leaves the previous scan's movies in place.
+        /// </summary>
+        public bool LastScanSucceeded { get; set; }
+
+        /// <summary>
         /// Which part of the running action <see cref="Processed"/> and
         /// <see cref="Total"/> belong to, in words for the page (for example
         /// "Step 1 of 3: Looking up 12 movies"). Without it a count of movie

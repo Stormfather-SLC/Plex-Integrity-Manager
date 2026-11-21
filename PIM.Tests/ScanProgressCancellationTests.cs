@@ -66,7 +66,7 @@ public sealed class ScanProgressCancellationTests
         var row = MovieResultRow.Create(movie, @"D:\Intake\Source", @"D:\Intake\Destination");
 
         Assert.Equal(MovieResultState.Pending, row.State);
-        Assert.Contains("Identify Movies", row.Summary);
+        Assert.Contains("Identify Again", row.Summary);
 
         movie.MetadataFetched = true;
         movie.MetadataMatchOrigin = MetadataMatchOrigin.ImdbId;
