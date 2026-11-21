@@ -50,6 +50,12 @@ namespace PIM.Core.Interfaces
         ///
         /// IMPORTANT:
         /// This method does NOT create Movie objects or perform parsing.
+        ///
+        /// Fails closed: a source folder that is missing or unreachable throws
+        /// <see cref="System.IO.DirectoryNotFoundException"/> (and one that
+        /// cannot be listed throws an I/O or access error) instead of
+        /// returning an empty list. An empty list means the folder was read
+        /// and holds no supported video files.
         /// </summary>
         /// <param name="rootPath">Root directory to scan</param>
         /// <param name="excludedRootPath">

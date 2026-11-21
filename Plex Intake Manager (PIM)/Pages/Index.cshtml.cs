@@ -185,6 +185,7 @@ namespace PIM.Web.Pages
                 currentFile = _progress.CurrentFile,
                 isRunning = _progress.IsRunning,
                 scanSucceeded = _progress.LastScanSucceeded,
+                scanMessage = _progress.Message,
                 canCancel = _progress.CanCancel,
                 cancelRequested = _progress.CancelRequested,
                 step = _progress.Step,
@@ -302,21 +303,44 @@ namespace PIM.Web.Pages
             }
         }
 
+        private static string SourceFolderMissingMessage(string rootPath) =>
+            $"The source folder \"{rootPath}\" can't be found or reached. " +
+            "Check that its drive or network share is connected. " +
+            "Nothing was changed; the previous scan is kept.";
+
+        private static string SourceFolderUnreadableMessage(string rootPath) =>
+            $"The source folder \"{rootPath}\" couldn't be read completely. " +
+            "Nothing was changed; the previous scan is kept.";
+
         private (bool Started, string? Message) StartScan()
         {
-            InvalidateDryRunApproval();
-
             var rootPath = _config["PIM:ScanPath"] ?? string.Empty;
-            var destinationRoot = _profileStore
-                .GetActiveProfile()
-                .DestinationRoot;
 
             if (string.IsNullOrWhiteSpace(rootPath))
                 return (false, "A source folder must be configured before scanning.");
 
+            // Fail closed: a missing folder (renamed, or a disconnected drive or
+            // network share) would otherwise scan as 0 movies and replace the
+            // saved scan, throwing away every identification and review choice.
+            if (!Directory.Exists(rootPath))
+            {
+                _progress.LastScanSucceeded = false;
+                _logger.LogWarning(
+                    "Refused the movie scan because the configured source folder can't be found or reached.");
+
+                return (false, SourceFolderMissingMessage(rootPath));
+            }
+
+            InvalidateDryRunApproval();
+
+            var destinationRoot = _profileStore
+                .GetActiveProfile()
+                .DestinationRoot;
+
             ResetProgress();
             _progress.IsRunning = true;
             _progress.LastScanSucceeded = false;
+            _progress.Message = string.Empty;
 
             _logger.LogInformation(
                 "Movie scan started for the configured source with destination exclusion enabled.");
@@ -357,6 +381,21 @@ namespace PIM.Web.Pages
                     _logger.LogInformation(
                         "Movie scan completed with {MovieCount} discovered movie file(s).",
                         movies.Count);
+                }
+                catch (DirectoryNotFoundException ex)
+                {
+                    _progress.Message = SourceFolderMissingMessage(rootPath);
+                    _logger.LogError(
+                        ex,
+                        "Movie scan failed because the configured source folder can't be found or reached.");
+                }
+                catch (Exception ex) when (
+                    ex is IOException or UnauthorizedAccessException)
+                {
+                    _progress.Message = SourceFolderUnreadableMessage(rootPath);
+                    _logger.LogError(
+                        ex,
+                        "Movie scan failed because the configured source folder couldn't be read.");
                 }
                 catch (Exception ex)
                 {

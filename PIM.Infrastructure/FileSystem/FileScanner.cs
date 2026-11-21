@@ -73,13 +73,20 @@ namespace PIM.Infrastructure.FileSystem
         /// This is used for progress tracking:
         /// Step 1: Get total file count
         /// Step 2: Process each file individually
+        ///
+        /// Fails closed: a source folder that is blank, invalid, missing, or
+        /// unreachable (a disconnected drive or network share) throws
+        /// <see cref="DirectoryNotFoundException"/>, and one whose top level
+        /// cannot be listed throws an I/O or access error, rather than
+        /// returning an empty list that would replace the previous scan.
         /// </summary>
         public List<string> GetFiles(
             string rootPath,
             string? excludedRootPath = null)
         {
             if (string.IsNullOrWhiteSpace(rootPath))
-                return new List<string>();
+                throw new DirectoryNotFoundException(
+                    "No source folder was given to scan.");
 
             string sourceRoot;
 
@@ -90,11 +97,14 @@ namespace PIM.Infrastructure.FileSystem
             catch (Exception ex) when (
                 ex is ArgumentException or NotSupportedException)
             {
-                return new List<string>();
+                throw new DirectoryNotFoundException(
+                    "The source folder path is not valid.",
+                    ex);
             }
 
             if (!Directory.Exists(sourceRoot))
-                return new List<string>();
+                throw new DirectoryNotFoundException(
+                    "The source folder can't be found or reached.");
 
             var excludedRoot = NormalizeExcludedRoot(
                 sourceRoot,
@@ -115,7 +125,17 @@ namespace PIM.Infrastructure.FileSystem
                     continue;
                 }
 
-                foreach (var file in EnumerateFilesSafely(currentDirectory))
+                // The source folder itself must be listable: a failure there
+                // means the drive or share is unavailable, not that it holds
+                // no movies. Unreadable subfolders are still skipped.
+                var isSourceRoot = string.Equals(
+                    currentDirectory,
+                    sourceRoot,
+                    PathComparison);
+
+                foreach (var file in isSourceRoot
+                             ? Directory.GetFiles(currentDirectory)
+                             : EnumerateFilesSafely(currentDirectory))
                 {
                     var fullPath = Path.GetFullPath(file);
 
@@ -127,8 +147,9 @@ namespace PIM.Infrastructure.FileSystem
                     }
                 }
 
-                foreach (var directory in EnumerateDirectoriesSafely(
-                             currentDirectory))
+                foreach (var directory in isSourceRoot
+                             ? Directory.GetDirectories(currentDirectory)
+                             : EnumerateDirectoriesSafely(currentDirectory))
                 {
                     var fullPath = Path.GetFullPath(directory);
 
@@ -142,6 +163,12 @@ namespace PIM.Infrastructure.FileSystem
                     pendingDirectories.Push(fullPath);
                 }
             }
+
+            // A drive or share that disconnected part-way through leaves a
+            // partial list; refuse it rather than replace the previous scan.
+            if (!Directory.Exists(sourceRoot))
+                throw new DirectoryNotFoundException(
+                    "The source folder stopped being reachable during the scan.");
 
             return discoveredFiles
                 .OrderBy(path => path, PathComparer)

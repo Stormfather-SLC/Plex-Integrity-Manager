@@ -1260,9 +1260,10 @@
         }
 
         if (progress.scanSucceeded !== true) {
-            workflowStatus.innerText =
-                "The scan failed, so no movies were identified. The previous scan is unchanged. " +
-                "The application log has the details.";
+            workflowStatus.innerText = progress.scanMessage
+                ? progress.scanMessage + " No movies were identified."
+                : "The scan failed, so no movies were identified. The previous scan is unchanged. " +
+                  "The application log has the details.";
             window.pimBusy?.unlock();
             return;
         }
