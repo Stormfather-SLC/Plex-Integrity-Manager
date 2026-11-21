@@ -66,6 +66,47 @@ public sealed partial class IndexModelSafetyTests
         Assert.Equal(previous.OriginalFilePath, Assert.Single(movies).OriginalFilePath);
     }
 
+    [Fact]
+    public void IdentifyAgain_IsOfferedOnlyWhenALookupCanBeRetried()
+    {
+        using var workspace = new TempWorkspace("PIM-Index-Tests");
+        var configuration = CreateConfiguration(workspace, LibraryGoal.OrganizeNewMovies);
+        var model = CreateModel(CreateStore(configuration), configuration, CreateProfile(workspace));
+
+        var identified = new Movie
+        {
+            Title = "Arctic",
+            Year = 2018,
+            ImdbId = "tt6820256",
+            MetadataFetched = true
+        };
+        var waitingOnOwner = new Movie { Title = "Awakenings", Year = 1990 };
+        waitingOnOwner.SetMetadataReview(
+            "Low confidence metadata match (21% confidence)",
+            MetadataLookupFailureType.LowConfidence);
+        var notFound = new Movie { Title = "Unknown Home Video" };
+        notFound.SetMetadataReview(
+            "IMDb ID could not be determined",
+            MetadataLookupFailureType.MovieNotFound);
+
+        // Nothing scanned, or every lookup answered: just Scan & Identify.
+        Assert.False(model.CanIdentifyAgain);
+        model.Movies = new List<Movie> { identified, waitingOnOwner, notFound };
+        Assert.False(model.CanIdentifyAgain);
+
+        // A movie not looked up yet, for example after Cancel.
+        model.Movies = new List<Movie> { identified, new() { Title = "RAD" } };
+        Assert.True(model.CanIdentifyAgain);
+
+        // A lookup OMDb did not answer.
+        var outage = new Movie { Title = "Son-In-Law" };
+        outage.SetMetadataReview(
+            "OMDb lookup failed: request timed out",
+            MetadataLookupFailureType.Timeout);
+        model.Movies = new List<Movie> { identified, outage };
+        Assert.True(model.CanIdentifyAgain);
+    }
+
     private sealed class FixedScanner : IFileScanner
     {
         private readonly string[] _files;

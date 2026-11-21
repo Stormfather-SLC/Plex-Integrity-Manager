@@ -363,10 +363,14 @@
             🎬 Scan &amp; Identify
         </button>
 
-        <!-- Identification only: retries movies not identified yet, without rescanning -->
+        <!-- Identification only: retries movies not identified yet, without
+             rescanning. Shown only when there is a lookup to retry; it stays in
+             the page because identify-workflow.js runs Scan & Identify's
+             second half and Cancel through it. -->
         <button type="button"
                 id="enrichBtn"
                 title="Look up only the movies that are not identified yet, without scanning again"
+                hidden="@(!Model.CanIdentifyAgain)"
                 disabled="@(!Model.Movies.Any())">
             🔎 Identify Again
         </button>

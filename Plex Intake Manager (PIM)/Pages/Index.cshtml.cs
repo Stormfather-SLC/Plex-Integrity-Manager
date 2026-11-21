@@ -68,6 +68,17 @@ namespace PIM.Web.Pages
                 .ToList();
 
         /// <summary>
+        /// Identify Again is offered only when a movie has a lookup to retry:
+        /// it was never looked up (for example after Cancel) or its lookup got
+        /// no answer from OMDb. Otherwise Scan &amp; Identify is the one action.
+        /// A movie waiting on the owner's choice is decided in its row.
+        /// </summary>
+        public bool CanIdentifyAgain =>
+            Movies.Any(movie =>
+                MovieResultRow.IsNotLookedUp(movie) ||
+                MovieResultRow.IsRetryableLookupFailure(movie));
+
+        /// <summary>
         /// Movie Results rows, things needing the owner first. Display only.
         /// </summary>
         public IReadOnlyList<MovieResultRow> ResultRows =>
